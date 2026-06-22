@@ -1,0 +1,6 @@
+{
+  "name": "Project Radha",
+  "description": "Yashvika Accounting Ecosystem & smart assistant for Rakhi Agency, featuring Gemini AI scan OCR and item mapping.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
