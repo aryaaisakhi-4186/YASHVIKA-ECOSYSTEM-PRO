@@ -766,25 +766,46 @@ export default function SakhiChat({
 
   return (
     <div className="flex flex-col h-full bg-white text-slate-800 rounded-2xl overflow-hidden border border-slate-200 shadow-xl font-sans">
-      {/* Header - Light daylight dual gradient */}
-      <div className="p-4 bg-gradient-to-r from-teal-50/80 via-indigo-50/50 to-amber-50/80 border-b border-indigo-100/60 flex items-center justify-between shadow-xs">
-        <div className="flex items-center gap-3">
-          <div className="flex flex-col items-start bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-xl shadow-xs shrink-0 font-bold text-xs text-amber-850">
-            <span>Radhe Radhe Ajay</span>
-          </div>
-          <div>
-            <div className="flex items-center gap-1.5">
-              <h3 id="sakhi-assistant-title" className="font-bold text-slate-900 text-xs sm:text-sm tracking-wide">
-                Sakhi AI Consultant
-              </h3>
-              <span className="text-[9px] bg-red-100 text-red-700 border border-red-200 font-extrabold px-1 py-0.2 rounded uppercase">
-                Voice Enabled
-              </span>
+      {/* Header - Ultra-compact daylight dual gradient to maximize screen real estate */}
+      <div className="bg-gradient-to-r from-teal-50/80 via-indigo-50/50 to-amber-50/80 border-b border-indigo-100/60 p-2.5 sm:p-3 flex flex-col gap-2 shadow-xs shrink-0 select-none">
+        
+        {/* Row 1: Brand Title, Workspace Greet & Close button */}
+        <div className="flex items-center justify-between w-full gap-2">
+          <div className="flex items-center gap-1.5 min-w-0">
+            <h3 id="sakhi-assistant-title" className="font-extrabold text-slate-900 text-xs sm:text-sm tracking-wide shrink-0">
+              ✨ Sakhi AI
+            </h3>
+            <span className="text-[10px] text-teal-700 font-medium shrink-0">
+              • AI Partner
+            </span>
+            <div className="bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded text-[9px] font-bold text-amber-850 shrink-0 whitespace-nowrap">
+              🙏 Radhe Radhe Ajay
             </div>
-            <p className="text-[10px] text-teal-700 font-bold font-sans">Senior Tax & Bookkeeping AI Partner • Active advisor</p>
+          </div>
+
+          <div className="flex items-center gap-1.5 shrink-0">
+            {/* Close / Hide Button */}
+            {onClose && (
+              <button
+                type="button"
+                onClick={onClose}
+                className="p-1 rounded bg-white hover:bg-red-50 hover:text-red-650 border border-slate-200 hover:border-red-300 transition-all cursor-pointer text-slate-400 flex items-center justify-center h-5 w-5 shadow-xs"
+                title="Hide AI Assistant (Sakhi)"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            )}
           </div>
         </div>
-        <div className="flex items-center gap-1.5">
+
+        {/* Row 2: Hands-Free and Voice Control Bar compacted to save huge amount of space */}
+        <div className="flex items-center gap-1.5 w-full">
+          {/* Voice Status Badge */}
+          <span className="text-[9px] bg-red-100 text-red-750 border border-red-250/50 font-extrabold px-1.5 py-1 rounded uppercase tracking-wider flex items-center gap-1 h-6.5 shadow-xs shrink-0 select-none">
+            <span className="h-1.5 w-1.5 rounded-full bg-red-600 animate-pulse"></span>
+            Voice Enabled
+          </span>
+          
           {/* Hands-Free Passive Listener Toggle */}
           <button
             type="button"
@@ -800,19 +821,18 @@ export default function SakhiChat({
                 }
               }
             }}
-            className={`p-1.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1 text-[10px] font-bold ${
+            className={`flex-1 py-1 px-1.5 rounded-md border transition-all cursor-pointer flex items-center justify-center gap-1 text-[9px] font-bold shadow-xs h-6.5 ${
               isHandsFree 
-                ? "bg-emerald-100 text-emerald-800 border-emerald-300 shadow-inner" 
-                : "bg-slate-50 text-slate-400 border-slate-200"
+                ? "bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700 shadow-inner" 
+                : "bg-white text-slate-650 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
             }`}
             title="Always-Listening Hands-Free Mode (Gemini Live Style)"
           >
-            <span className={`relative flex h-1.5 w-1.5 mr-0.5`}>
+            <span className="relative flex h-1 w-1 shrink-0">
               {isHandsFree && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
-              <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${isHandsFree ? "bg-emerald-600" : "bg-slate-400"}`}></span>
+              <span className={`relative inline-flex rounded-full h-1 w-1 ${isHandsFree ? "bg-white" : "bg-slate-400"}`}></span>
             </span>
-            <span className="hidden sm:inline">{isHandsFree ? "Live Loop: ON" : "Live Loop: OFF"}</span>
-            <span className="sm:hidden">{isHandsFree ? "Live" : "Manual"}</span>
+            <span className="truncate">{isHandsFree ? "Live Loop: ON" : "Live Loop: OFF"}</span>
           </button>
 
           {/* TTS Toggle option */}
@@ -825,28 +845,16 @@ export default function SakhiChat({
                 setSpeakingId(null);
               }
             }}
-            className={`p-1.5 rounded-lg border transition-all cursor-pointer flex items-center gap-1 text-[10px] font-bold ${
+            className={`flex-1 py-1 px-1.5 rounded-md border transition-all cursor-pointer flex items-center justify-center gap-1 text-[9px] font-bold shadow-xs h-6.5 ${
               autoSpeak 
-                ? "bg-amber-100 text-amber-800 border-amber-300 shadow-inner" 
-                : "bg-slate-50 text-slate-400 border-slate-200"
+                ? "bg-indigo-600 text-white border-indigo-700 hover:bg-indigo-700 shadow-inner" 
+                : "bg-white text-slate-650 border-slate-200 hover:bg-slate-50 hover:border-slate-300"
             }`}
             title="Toggle Automatic Speech-to-Voice Output"
           >
-            {autoSpeak ? <Volume2 className="h-3.5 w-3.5" /> : <Volume1 className="h-3.5 w-3.5 text-slate-350" />}
-            <span className="hidden sm:inline">Voice Response</span>
+            {autoSpeak ? <Volume2 className="h-3 w-3 shrink-0" /> : <Volume1 className="h-3 w-3 text-slate-400 shrink-0" />}
+            <span className="truncate">Voice Response</span>
           </button>
-
-          {/* Close / Hide Button */}
-          {onClose && (
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-red-50 hover:text-red-655 hover:border-red-300 transition-all cursor-pointer text-slate-400 flex items-center justify-center"
-              title="Hide AI Assistant (Sakhi)"
-            >
-              <X className="h-3.5 w-3.5" />
-            </button>
-          )}
         </div>
       </div>
 

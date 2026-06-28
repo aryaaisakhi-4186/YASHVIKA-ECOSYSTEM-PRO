@@ -53,16 +53,20 @@ function isMockToken(token: string): boolean {
 }
 
 // 1. Search Client Folders in Google Drive (specifically looking for "Shared with me" and owned folders)
-export async function searchClientFolders(accessToken: string, clientName: string): Promise<any[]> {
+export async function searchClientFolders(accessToken: string, clientName: string, driveFolderId?: string): Promise<any[]> {
   const cleanName = clientName.split("(")[0].replace(/[^a-zA-Z0-9\s]/g, "").trim();
   
   if (isMockToken(accessToken)) {
     console.log(`[Mock Google Workspace Active] Simulating folders look-up for: "${clientName}"`);
+    const finalFolderId = driveFolderId || `mock-folder-${cleanName.toLowerCase().replace(/\s+/g, "-") || "general"}`;
+    const webLink = driveFolderId 
+      ? `https://drive.google.com/drive/folders/${driveFolderId}`
+      : `https://drive.google.com/drive/my-drive`;
     return [
       {
-        id: `mock-folder-${cleanName.toLowerCase().replace(/\s+/g, "-") || "general"}`,
-        name: `Master_Accounting_Sheet - ${cleanName}`,
-        webViewLink: `https://drive.google.com/drive/folders/mock-folder-${cleanName.toLowerCase().replace(/\s+/g, "-") || "general"}`,
+        id: finalFolderId,
+        name: `Master Accounting Sheet - ${cleanName}`,
+        webViewLink: webLink,
         shared: true,
         parents: []
       }
@@ -188,9 +192,10 @@ export async function getOrCreateClientSpreadsheet(accessToken: string, folderId
 
   if (isMockToken(accessToken)) {
     console.log(`[Mock Google Workspace Active] Simulating spreadsheet creation: "${title}"`);
+    const workingSheetUrl = localStorage.getItem("radha_google_sheet_url") || "https://docs.google.com/spreadsheets/d/1GcG1ekpVnewJo034_yttoP92qIYEeO_2uBacAgpwCqU/edit?gid=0#gid=0";
     return {
       id: `mock-sheet-${cleanName.toLowerCase().replace(/\s+/g, "-") || "general"}`,
-      webViewLink: `https://docs.google.com/spreadsheets/d/mock-sheet-${cleanName.toLowerCase().replace(/\s+/g, "-") || "general"}`
+      webViewLink: workingSheetUrl
     };
   }
 

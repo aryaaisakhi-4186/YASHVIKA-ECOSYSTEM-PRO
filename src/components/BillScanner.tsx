@@ -24,7 +24,7 @@ import {
   Minimize2,
   ExternalLink
 } from "lucide-react";
-import { Bill, BillItem, ItemMapping, MasterItem, ClientMaster } from "../types";
+import { Bill, BillItem, ItemMapping, MasterItem, ClientMaster, SheetSchemaMapping } from "../types";
 
 interface BillScannerProps {
   onBillScanned: (newBill: Bill) => void;
@@ -35,6 +35,7 @@ interface BillScannerProps {
   masterItems: MasterItem[];
   onTabChange?: (tab: string) => void;
   clientMasters?: ClientMaster[];
+  sheetSchemaMappings?: SheetSchemaMapping[];
 }
 
 interface BatchFile {
@@ -58,6 +59,7 @@ export default function BillScanner({
   masterItems,
   onTabChange,
   clientMasters = [],
+  sheetSchemaMappings = [],
 }: BillScannerProps) {
   // Navigation inside Scanner tab
   const [scannerMode, setScannerMode] = useState<"single" | "batch">("batch");
@@ -68,6 +70,8 @@ export default function BillScanner({
   const [singleStage, setSingleStage] = useState<"idle" | "review">("idle");
   const [singleScannedData, setSingleScannedData] = useState<Partial<Bill> | null>(null);
   const [singleImagePreview, setSingleImagePreview] = useState<string | null>(null);
+  const [singleFileName, setSingleFileName] = useState<string>("");
+  const [singleFileType, setSingleFileType] = useState<string>("");
   const [singleError, setSingleError] = useState<string | null>(null);
 
   // --- BATCH SCANNER STATES ---
@@ -136,6 +140,57 @@ export default function BillScanner({
   
   // Full-screen toggle for the document match mirror / verification panel
   const [isFullScreenPreview, setIsFullScreenPreview] = useState(false);
+
+  // Split pane resizer state (percentage for left pane)
+  const [leftWidth, setLeftWidth] = useState<number>(55);
+  const [isResizing, setIsResizing] = useState<boolean>(false);
+  const [windowWidth, setWindowWidth] = useState<number>(typeof window !== "undefined" ? window.innerWidth : 1200);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handleResize = () => setWindowWidth(window.innerWidth);
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const isLargeScreen = windowWidth >= 1024;
+
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleDragMouseDown = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  };
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const container = document.getElementById("single-workspace-container") || 
+                        document.getElementById("batch-workspace-container") || 
+                        containerRef.current;
+      if (!container) return;
+      const containerRect = container.getBoundingClientRect();
+      const newLeftWidth = ((e.clientX - containerRect.left) / containerRect.width) * 100;
+      // Limit to reasonable bounds (e.g. 20% to 80%)
+      if (newLeftWidth >= 20 && newLeftWidth <= 80) {
+        setLeftWidth(newLeftWidth);
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    if (isResizing) {
+      document.addEventListener("mousemove", handleMouseMove);
+      document.addEventListener("mouseup", handleMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing]);
   
   // Dynamic SOP guide record for the selected bill
   const [sopRecord, setSopRecord] = useState<Record<string, string>>(() => {
@@ -158,6 +213,7 @@ export default function BillScanner({
 
   // Selected preview tab toggle (default is original voucher "raw")
   const [previewTab, setPreviewTab] = useState<"voucher" | "raw">("raw");
+  const [pdfSubTab, setPdfSubTab] = useState<"converted" | "raw">("converted");
 
   // Draggable Bounding Box Selection Tool States
   const [isSelectionMode, setIsSelectionMode] = useState<boolean>(true); // Active selection tool mode
@@ -299,13 +355,22 @@ export default function BillScanner({
       const clickY = (dragStart.y / rect.height) * 100;
       
       setActiveClickCoords({ x: clickX, y: clickY });
-      if (selectedSpotField === "supplierName") setSpotFieldInputValue(editSupplierName);
-      else if (selectedSpotField === "invoiceNo") setSpotFieldInputValue(editInvoiceNo);
-      else if (selectedSpotField === "date") setSpotFieldInputValue(editDate);
-      else if (selectedSpotField === "taxableAmount") setSpotFieldInputValue(String(editTaxableAmount || ""));
-      else if (selectedSpotField === "gstAmount") setSpotFieldInputValue(String(editGstAmount || ""));
-      else if (selectedSpotField === "totalAmount") setSpotFieldInputValue(String(editTotalAmount || ""));
-      else setSpotFieldInputValue("");
+      const fieldLower = selectedSpotField.toLowerCase();
+      if (fieldLower.includes("party") || fieldLower.includes("supplier") || fieldLower === "vendor") {
+        setSpotFieldInputValue(editSupplierName);
+      } else if (fieldLower.includes("invoice") || fieldLower.includes("vch no") || fieldLower === "vch_no") {
+        setSpotFieldInputValue(editInvoiceNo);
+      } else if (fieldLower.includes("date")) {
+        setSpotFieldInputValue(editDate);
+      } else if (fieldLower.includes("taxable") || fieldLower === "amount" || fieldLower === "subtotal" || fieldLower === "taxable amount") {
+        setSpotFieldInputValue(String(editTaxableAmount || ""));
+      } else if (fieldLower.includes("gst") || fieldLower === "bs_amount" || fieldLower === "cgst" || fieldLower === "sgst" || fieldLower === "igst") {
+        setSpotFieldInputValue(String(editGstAmount || ""));
+      } else if (fieldLower.includes("total") || fieldLower === "grand total" || fieldLower === "settlement amount") {
+        setSpotFieldInputValue(String(editTotalAmount || ""));
+      } else {
+        setSpotFieldInputValue("");
+      }
       
       setActiveRect(null);
     }
@@ -421,14 +486,14 @@ export default function BillScanner({
     const itemsHtmlRows = activeItems.map((item: any, idx: number) => `
       <tr>
         <td>${idx + 1}</td>
-        <td style="font-family: sans-serif; font-weight: bold; color: #f1f5f9;">${item.localName || "N/A"}</td>
+        <td style="font-family: sans-serif; font-weight: bold; color: #0f172a;">${item.localName || "N/A"}</td>
         <td style="text-align: center;">${item.quantity || 0}</td>
         <td style="text-align: right;">₹${(item.rate || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
         <td style="text-align: right;">₹${(item.taxableAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
-        <td style="text-align: center; color: #f472b6;">${item.gstRate || 0}%</td>
-        <td style="text-align: right; color: #f472b6;">₹${(item.gstAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="text-align: center; color: #db2777;">${item.gstRate || 0}%</td>
+        <td style="text-align: right; color: #db2777;">₹${(item.gstAmount || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
         <td style="text-align: center;">${item.hsnCode || "N/A"}</td>
-        <td style="text-align: right; font-weight: bold; color: #34d399;">₹${(item.totalAmount || ((item.taxableAmount || 0) + (item.gstAmount || 0)) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td style="text-align: right; font-weight: bold; color: #16a34a;">₹${(item.totalAmount || ((item.taxableAmount || 0) + (item.gstAmount || 0)) || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
       </tr>
     `).join("");
 
@@ -443,8 +508,8 @@ export default function BillScanner({
                 margin: 0;
                 padding: 0;
                 height: 100vh;
-                background-color: #0b0f19;
-                color: #f1f5f9;
+                background-color: #f8fafc;
+                color: #0f172a;
                 font-family: ui-sans-serif, system-ui, sans-serif;
                 overflow: hidden;
                 display: flex;
@@ -452,14 +517,13 @@ export default function BillScanner({
               }
               .app-header {
                 height: 64px;
-                background-color: #111827;
-                border-b: 1px solid #1f2937;
+                background-color: #ffffff;
                 display: flex;
                 align-items: center;
                 justify-content: space-between;
                 padding: 0 24px;
                 box-sizing: border-box;
-                border-bottom: 1px solid #1f2937;
+                border-bottom: 1px solid #cbd5e1;
               }
               .header-title-section {
                 display: flex;
@@ -478,7 +542,7 @@ export default function BillScanner({
                 height: 100%;
                 width: 100%;
                 border-radius: 9999px;
-                background-color: #818cf8;
+                background-color: #3b82f6;
                 opacity: 0.75;
                 animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
               }
@@ -488,7 +552,7 @@ export default function BillScanner({
                 border-radius: 9999px;
                 height: 10px;
                 width: 10px;
-                background-color: #6366f1;
+                background-color: #2563eb;
               }
               @keyframes ping {
                 75%, 100% {
@@ -501,19 +565,19 @@ export default function BillScanner({
                 font-weight: 800;
                 letter-spacing: 0.05em;
                 text-transform: uppercase;
-                color: #ffffff;
+                color: #0f172a;
                 margin: 0;
               }
               .header-subtitle {
                 font-size: 10px;
-                color: #9ca3af;
+                color: #64748b;
                 font-family: monospace;
                 margin: 2px 0 0 0;
               }
               .badge-certified {
-                background-color: rgba(16, 185, 129, 0.15);
-                border: 1px solid rgba(16, 185, 129, 0.3);
-                color: #34d399;
+                background-color: rgba(5, 150, 105, 0.1);
+                border: 1px solid rgba(5, 150, 105, 0.3);
+                color: #059669;
                 font-size: 9px;
                 font-weight: 700;
                 padding: 4px 8px;
@@ -527,21 +591,58 @@ export default function BillScanner({
                 display: flex;
                 height: calc(100vh - 64px);
                 overflow: hidden;
+                width: 100%;
               }
 
               /* Split Columns */
               .pane-left {
                 width: 45%;
-                border-right: 1px solid #1f2937;
-                background-color: #030712;
+                background-color: #f1f5f9;
                 display: flex;
                 flex-direction: column;
                 position: relative;
                 height: 100%;
+                overflow: hidden;
               }
+
+              .resizer-col {
+                width: 12px;
+                background-color: #e2e8f0;
+                cursor: col-resize;
+                position: relative;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                transition: background-color 0.15s ease;
+                user-select: none;
+                border-left: 1px solid #cbd5e1;
+                border-right: 1px solid #cbd5e1;
+                z-index: 100;
+              }
+              .resizer-col:hover, .resizer-col.resizing {
+                background-color: #4f46e5;
+              }
+              .resizer-handle {
+                width: 24px;
+                height: 24px;
+                background-color: #ffffff;
+                color: #4f46e5;
+                border: 1px solid #4f46e5;
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                font-size: 11px;
+                font-weight: bold;
+                box-shadow: 0 4px 10px rgba(0, 0, 0, 0.15);
+                user-select: none;
+                pointer-events: none;
+                z-index: 110;
+              }
+
               .pane-right {
                 width: 55%;
-                background-color: #090d16;
+                background-color: #f8fafc;
                 display: flex;
                 flex-direction: column;
                 height: 100%;
@@ -552,8 +653,8 @@ export default function BillScanner({
 
               .pane-title-bar {
                 height: 40px;
-                background-color: #0f172a;
-                border-bottom: 1px solid #1f2937;
+                background-color: #e2e8f0;
+                border-bottom: 1px solid #cbd5e1;
                 display: flex;
                 align-items: center;
                 padding: 0 16px;
@@ -562,7 +663,7 @@ export default function BillScanner({
                 font-weight: bold;
                 text-transform: uppercase;
                 letter-spacing: 0.05em;
-                color: #9ca3af;
+                color: #475569;
               }
 
               /* Image Toolbar inside Left Pane */
@@ -571,19 +672,19 @@ export default function BillScanner({
                 bottom: 24px;
                 left: 50%;
                 transform: translateX(-50%);
-                background-color: rgba(17, 24, 39, 0.95);
-                border: 1px solid #374151;
+                background-color: rgba(255, 255, 255, 0.95);
+                border: 1px solid #cbd5e1;
                 padding: 8px 16px;
                 border-radius: 9999px;
                 display: flex;
                 gap: 14px;
                 z-index: 10;
-                box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.7);
+                box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15);
               }
               .toolbar-btn {
                 background: none;
                 border: none;
-                color: #9ca3af;
+                color: #475569;
                 cursor: pointer;
                 font-size: 11px;
                 font-weight: bold;
@@ -593,7 +694,7 @@ export default function BillScanner({
                 transition: color 0.15s ease;
               }
               .toolbar-btn:hover {
-                color: #ffffff;
+                color: #000000;
               }
 
               /* Image Container */
@@ -610,9 +711,9 @@ export default function BillScanner({
                 max-width: 95%;
                 max-height: 95%;
                 object-fit: contain;
-                box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+                box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
                 border-radius: 8px;
-                border: 1px solid #1f2937;
+                border: 1px solid #cbd5e1;
                 transition: transform 0.2s ease;
                 transform-origin: center center;
               }
@@ -620,8 +721,8 @@ export default function BillScanner({
               .no-image-fallback {
                 text-align: center;
                 padding: 40px;
-                background: #111827;
-                border: 1px dashed #374151;
+                background: #ffffff;
+                border: 1px dashed #cbd5e1;
                 border-radius: 12px;
               }
 
@@ -630,7 +731,7 @@ export default function BillScanner({
                 font-size: 10px;
                 font-weight: 800;
                 text-transform: uppercase;
-                color: #818cf8;
+                color: #4f46e5;
                 letter-spacing: 0.1em;
                 margin-bottom: 12px;
                 font-family: monospace;
@@ -642,14 +743,15 @@ export default function BillScanner({
                 content: '';
                 flex: 1;
                 height: 1px;
-                background-color: #1f2937;
+                background-color: #cbd5e1;
               }
               .card {
-                background-color: #111827;
-                border: 1px solid #1f2937;
+                background-color: #ffffff;
+                border: 1px solid #e2e8f0;
                 border-radius: 12px;
                 padding: 18px;
                 margin-bottom: 24px;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
               }
               .summary-grid {
                 display: grid;
@@ -657,15 +759,15 @@ export default function BillScanner({
                 gap: 12px;
               }
               .summary-item {
-                background-color: #030712;
-                border: 1px solid #1f2937;
+                background-color: #f8fafc;
+                border: 1px solid #e2e8f0;
                 border-radius: 8px;
                 padding: 10px 14px;
               }
               .summary-label {
                 font-size: 8.5px;
                 text-transform: uppercase;
-                color: #9ca3af;
+                color: #64748b;
                 font-family: monospace;
                 font-weight: 700;
                 letter-spacing: 0.05em;
@@ -681,8 +783,8 @@ export default function BillScanner({
               .table-wrapper {
                 overflow-x: auto;
                 border-radius: 8px;
-                border: 1px solid #1f2937;
-                background-color: #030712;
+                border: 1px solid #e2e8f0;
+                background-color: #ffffff;
                 margin-bottom: 24px;
               }
               table {
@@ -692,31 +794,31 @@ export default function BillScanner({
                 white-space: nowrap;
               }
               th {
-                background-color: #111827;
-                color: #9ca3af;
+                background-color: #f1f5f9;
+                color: #475569;
                 font-weight: 700;
                 text-transform: uppercase;
                 font-size: 9px;
                 font-family: monospace;
                 padding: 12px 14px;
-                border-bottom: 2px solid #1f2937;
+                border-bottom: 2px solid #cbd5e1;
                 text-align: left;
-                border-right: 1px solid #1f2937;
+                border-right: 1px solid #e2e8f0;
               }
               td {
                 padding: 10px 14px;
-                border-bottom: 1px solid #1f2937;
-                border-right: 1px solid #1f2937;
+                border-bottom: 1px solid #e2e8f0;
+                border-right: 1px solid #e2e8f0;
                 font-family: monospace;
-                color: #cbd5e1;
+                color: #334155;
               }
               td:last-child, th:last-child {
                 border-right: none;
               }
-              .highlight-vch { color: #60a5fa; font-weight: bold; }
-              .highlight-date { color: #34d399; font-weight: bold; }
-              .highlight-party { color: #38bdf8; font-weight: bold; }
-              .highlight-amount { color: #c084fc; font-weight: bold; text-align: right; }
+              .highlight-vch { color: #1d4ed8; font-weight: bold; }
+              .highlight-date { color: #15803d; font-weight: bold; }
+              .highlight-party { color: #0369a1; font-weight: bold; }
+              .highlight-amount { color: #7c3aed; font-weight: bold; text-align: right; }
               .text-right { text-align: right; }
               .text-center { text-align: center; }
 
@@ -726,14 +828,14 @@ export default function BillScanner({
                 height: 8px;
               }
               ::-webkit-scrollbar-track {
-                background: #030712;
+                background: #f1f5f9;
               }
               ::-webkit-scrollbar-thumb {
-                background: #1f2937;
+                background: #cbd5e1;
                 border-radius: 4px;
               }
               ::-webkit-scrollbar-thumb:hover {
-                background: #374151;
+                background: #94a3b8;
               }
             </style>
           </head>
@@ -758,7 +860,7 @@ export default function BillScanner({
             <!-- Main Layout Grid -->
             <div class="workspace-layout">
               <!-- LEFT COLUMN: Scanned Voucher Scan -->
-              <div class="pane-left">
+              <div class="pane-left" id="leftPane">
                 <div class="pane-title-bar">
                   📄 Original Scanned Voucher
                 </div>
@@ -784,186 +886,17 @@ export default function BillScanner({
                 ` : ""}
               </div>
 
+              <!-- DRAGGABLE SEPARATOR LINE -->
+              <div class="resizer-col" id="dragResizer">
+                <div class="resizer-handle">↔</div>
+              </div>
+
               <!-- RIGHT COLUMN: Ledger spreadsheet & extracted items details side-by-side -->
-              <div class="pane-right">
-                <!-- Section 1: Core Parameters -->
-                <div class="section-title">📂 Document Core Parameters</div>
-                <div class="card">
-                  <div class="summary-grid" style="margin-bottom: 12px;">
-                    <div class="summary-item">
-                      <div class="summary-label">Vendor Name</div>
-                      <div class="summary-val" style="color: #60a5fa;">${editSupplierName || "Unknown / N/A"}</div>
-                    </div>
-                    <div class="summary-item">
-                      <div class="summary-label">Invoice Number</div>
-                      <div class="summary-val" style="color: #f59e0b;">${editInvoiceNo || "Unknown / N/A"}</div>
-                    </div>
-                    <div class="summary-item">
-                      <div class="summary-label">Invoice Date</div>
-                      <div class="summary-val" style="color: #34d399;">${editDate || "Unknown / N/A"}</div>
-                    </div>
-                  </div>
-
-                  <div class="summary-grid">
-                    <div class="summary-item">
-                      <div class="summary-label">Taxable Amount Total</div>
-                      <div class="summary-val" style="color: #e2e8f0;">₹${editTaxableAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
-                    </div>
-                    <div class="summary-item">
-                      <div class="summary-label">GST Tax Total</div>
-                      <div class="summary-val" style="color: #f472b6;">₹${editGstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
-                    </div>
-                    <div class="summary-item">
-                      <div class="summary-label">Grand Total</div>
-                      <div class="summary-val" style="color: #10b981;">₹${editTotalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</div>
-                    </div>
-                  </div>
-                </div>
-
+              <div class="pane-right" id="rightPane">
                 <!-- Section 2: Ledger Columns -->
                 <div class="section-title">📊 Organized ERP Ledger Columns Alignment</div>
                 <div class="table-wrapper">
-                  ${isSales ? `
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th style="color: #fbbf24">SERIES</th>
-                          <th style="color: #34d399">DATE</th>
-                          <th style="color: #60a5fa">Invoice No</th>
-                          <th style="color: #c084fc">SALE TYPE</th>
-                          <th style="color: #f472b6">GSTIN</th>
-                          <th style="color: #38bdf8">PARTY NAME</th>
-                          <th>FOR / MOTOR CUT</th>
-                          <th style="text-align: right">TOTAL FREIGHT</th>
-                          <th style="text-align: right">ADVANCE FREIGHT</th>
-                          <th style="text-align: right">BALANCE FREIGHT</th>
-                          <th style="text-align: right">ADVANCE (CASH)</th>
-                          <th style="text-align: right">ADVANCE (BANK)</th>
-                          <th style="color: #f97316">ITEMS</th>
-                          <th style="text-align: center">Qty</th>
-                          <th style="text-align: center">Unit</th>
-                          <th style="text-align: right">Amount</th>
-                          <th>Bs-1</th>
-                          <th style="text-align: right">BS Amout-1</th>
-                          <th>Bs-2</th>
-                          <th style="text-align: right">BS Amout-2</th>
-                          <th>Bs-3</th>
-                          <th style="text-align: right">BS Amout-3</th>
-                          <th>settlement account</th>
-                          <th style="text-align: right">settlement amount</th>
-                          <th>settlement narration</th>
-                          <th>Bill by Bill-debtors</th>
-                          <th style="text-align: right">bill ref amount</th>
-                          <th>bill ref due date</th>
-                          <th>Bill by Bill-transport</th>
-                          <th style="text-align: right">bill ref amount-transport</th>
-                          <th>bill ref due date-transport</th>
-                          <th>transporter</th>
-                          <th>GR/R No.</th>
-                          <th>GR Date</th>
-                          <th>Vehicle No.</th>
-                          <th>Station</th>
-                          <th>pin code</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr>
-                          <td style="color: #64748b">1</td>
-                          <td style="color: #f59e0b">A</td>
-                          <td class="highlight-date">${editDate || "N/A"}</td>
-                          <td class="highlight-invoice">${editInvoiceNo || "N/A"}</td>
-                          <td style="color: #a855f7">GST ${editGstAmount && editTaxableAmount ? Math.round((editGstAmount / editTaxableAmount) * 100) : 18}%</td>
-                          <td class="highlight-gst">${activeGSTIN || "N/A"}</td>
-                          <td class="highlight-party">${editSupplierName || "N/A"}</td>
-                          <td>N/A</td>
-                          <td style="text-align: right">₹0.00</td>
-                          <td style="text-align: right">₹0.00</td>
-                          <td style="text-align: right">₹0.00</td>
-                          <td style="text-align: right">₹0.00</td>
-                          <td style="text-align: right">₹0.00</td>
-                          <td style="color: #ea580c">${activeItems.length > 0 ? activeItems.map((it: any) => it.localName).join(", ") : "SOP Urea Fertilizer"}</td>
-                          <td style="text-align: center">${activeItems.length > 0 ? activeItems.reduce((acc: number, it: any) => acc + (it.quantity || 0), 0) : 50}</td>
-                          <td style="text-align: center">PCS</td>
-                          <td class="highlight-amount">₹${editTaxableAmount ? editTaxableAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "0.00"}</td>
-                          <td>CGST</td>
-                          <td style="text-align: right; color: #f472b6">₹${editGstAmount ? (editGstAmount / 2).toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "0.00"}</td>
-                          <td>SGST</td>
-                          <td style="text-align: right; color: #f472b6">₹${editGstAmount ? (editGstAmount / 2).toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "0.00"}</td>
-                          <td>IGST</td>
-                          <td style="text-align: right">₹0.00</td>
-                          <td style="color: #34d399">Cash</td>
-                          <td class="highlight-amount" style="color: #34d399">₹${editTotalAmount ? editTotalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "0.00"}</td>
-                          <td>Auto synced by Sakhi</td>
-                          <td>N/A</td>
-                          <td style="text-align: right">₹0.00</td>
-                          <td>N/A</td>
-                          <td>N/A</td>
-                          <td style="text-align: right">₹0.00</td>
-                          <td>N/A</td>
-                          <td>Self</td>
-                          <td>N/A</td>
-                          <td>N/A</td>
-                          <td>HR-55-A-1234</td>
-                          <td>Delhi</td>
-                          <td>110001</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  ` : `
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th style="color: #fbbf24">SERIES</th>
-                          <th style="color: #34d399">DATE</th>
-                          <th style="color: #60a5fa">VCH NO</th>
-                          <th style="color: #c084fc">PURCHASE TYPE</th>
-                          <th style="color: #38bdf8">PARTY NAME</th>
-                          <th>TYPE OF DEALER</th>
-                          <th>BILLED PARTY</th>
-                          <th>ADDRESS</th>
-                          <th>STATE</th>
-                          <th style="color: #f472b6">GSTIN</th>
-                          <th style="color: #f97316">ITEM NAME</th>
-                          <th style="text-align: center">QTY</th>
-                          <th style="text-align: center">UNIT</th>
-                          <th style="text-align: right">AMOUNT</th>
-                          <th>BS_NAME</th>
-                          <th style="text-align: right">BS_AMOUNT</th>
-                          <th>Bill Link (Drive)</th>
-                          <th>Status (Draft/Final)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr>
-                          <td style="color: #64748b">1</td>
-                          <td style="color: #f59e0b">A</td>
-                          <td class="highlight-date">${editDate || "N/A"}</td>
-                          <td class="highlight-invoice">${editInvoiceNo || "N/A"}</td>
-                          <td style="color: #a855f7">GST ${editGstAmount && editTaxableAmount ? Math.round((editGstAmount / editTaxableAmount) * 100) : 18}%</td>
-                          <td class="highlight-party">${editSupplierName || "N/A"}</td>
-                          <td>${activeGSTIN ? "Registered" : "Unregistered"}</td>
-                          <td>Radhe Radhe Bookkeeping Clients</td>
-                          <td style="font-family: sans-serif">Delhi City Office Branch, IN</td>
-                          <td>Haryana</td>
-                          <td class="highlight-gst">${activeGSTIN || "N/A"}</td>
-                          <td style="color: #ea580c">${activeItems.length > 0 ? activeItems.map((it: any) => it.localName).join(", ") : "SOP Urea Fertilizer"}</td>
-                          <td style="text-align: center">${activeItems.length > 0 ? activeItems.reduce((acc: number, it: any) => acc + (it.quantity || 0), 0) : 50}</td>
-                          <td style="text-align: center">PCS</td>
-                          <td class="highlight-amount">₹${editTaxableAmount ? editTaxableAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "0.00"}</td>
-                          <td>CGST/SGST</td>
-                          <td class="highlight-gst" style="text-align: right">₹${editGstAmount ? editGstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "0.00"}</td>
-                          <td style="color: #60a5fa; text-decoration: underline">
-                             <a href="${getMatchedClientFolderLink(editSupplierName, activeGSTIN || "")}" target="_blank" rel="noreferrer" style="color: #60a5fa;">
-                               ${getMatchedClientFolderLink(editSupplierName, activeGSTIN || "").replace("https://drive.google.com/drive/folders/", "Drive: ")}
-                             </a>
-                           </td>
-                          <td><span style="color: #fbbf24; background: rgba(245, 158, 11, 0.15); padding: 2px 6px; border-radius: 4px; font-weight: bold;">DRAFT</span></td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  `}
+                  ${getDynamicSchemaTableHtml(isSales, activeItems, activeGSTIN)}
                 </div>
 
                 <!-- Section 3: Extracted Line Items -->
@@ -1026,6 +959,45 @@ export default function BillScanner({
                 rotation = 0;
                 updateTransform();
               }
+
+              // High-performance Drag Resize implementation for side-by-side workspace
+              const dragResizer = document.getElementById('dragResizer');
+              const leftPane = document.getElementById('leftPane');
+              const rightPane = document.getElementById('rightPane');
+              const layout = leftPane ? leftPane.parentElement : null;
+              
+              let isDragging = false;
+              
+              if (dragResizer && leftPane && rightPane && layout) {
+                dragResizer.addEventListener('mousedown', function(e) {
+                  e.preventDefault();
+                  isDragging = true;
+                  dragResizer.classList.add('resizing');
+                  document.body.style.cursor = 'col-resize';
+                });
+                
+                document.addEventListener('mousemove', function(e) {
+                  if (!isDragging) return;
+                  const containerWidth = layout.clientWidth;
+                  if (containerWidth <= 0) return;
+                  
+                  let newLeftWidth = (e.clientX / containerWidth) * 100;
+                  // Set safe limits between 20% and 80%
+                  if (newLeftWidth < 20) newLeftWidth = 20;
+                  if (newLeftWidth > 80) newLeftWidth = 80;
+                  
+                  leftPane.style.width = newLeftWidth + '%';
+                  rightPane.style.width = (100 - newLeftWidth) + '%';
+                });
+                
+                document.addEventListener('mouseup', function() {
+                  if (isDragging) {
+                    isDragging = false;
+                    dragResizer.classList.remove('resizing');
+                    document.body.style.cursor = 'default';
+                  }
+                });
+              }
             </script>
           </body>
         </html>
@@ -1034,25 +1006,63 @@ export default function BillScanner({
     }
   };
 
+  // Helper to determine file category for visual OCR previews
+  const getFileType = (imageSrc: string | null, activeId: string): "image" | "pdf" | "excel" | "word" => {
+    if (!imageSrc) return "image";
+    
+    if (imageSrc.startsWith("data:application/pdf") || imageSrc.includes("pdf")) return "pdf";
+    if (imageSrc.startsWith("data:application/vnd.ms-excel") || 
+        imageSrc.startsWith("data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") ||
+        imageSrc.startsWith("data:text/csv") ||
+        imageSrc.includes("sheet") || imageSrc.includes("excel") || imageSrc.includes("csv")) {
+      return "excel";
+    }
+    if (imageSrc.startsWith("data:application/msword") || 
+        imageSrc.startsWith("data:application/vnd.openxmlformats-officedocument.wordprocessingml.document") ||
+        imageSrc.includes("word") || imageSrc.includes("officedocument.wordprocessing")) {
+      return "word";
+    }
+
+    if (activeId === "single") {
+      const lowerName = singleFileName?.toLowerCase() || "";
+      const lowerType = singleFileType?.toLowerCase() || "";
+      if (lowerName.endsWith(".pdf") || lowerType.includes("pdf")) return "pdf";
+      if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".csv") || lowerType.includes("sheet") || lowerType.includes("excel") || lowerType.includes("csv")) return "excel";
+      if (lowerName.endsWith(".docx") || lowerName.endsWith(".doc") || lowerType.includes("word") || lowerType.includes("officedocument.wordprocessing")) return "word";
+    } else {
+      const item = batchQueue.find(it => it.id === activeId);
+      if (item) {
+        const lowerName = item.name?.toLowerCase() || "";
+        const lowerType = item.originalType?.toLowerCase() || "";
+        if (lowerName.endsWith(".pdf") || lowerType.includes("pdf")) return "pdf";
+        if (lowerName.endsWith(".xlsx") || lowerName.endsWith(".xls") || lowerName.endsWith(".csv") || lowerType.includes("sheet") || lowerType.includes("excel") || lowerType.includes("csv")) return "excel";
+        if (lowerName.endsWith(".docx") || lowerName.endsWith(".doc") || lowerType.includes("word") || lowerType.includes("officedocument.wordprocessing")) return "word";
+      }
+    }
+    
+    return "image";
+  };
+
   // Beautiful interactive canvas displaying the voucher with visual spot pins and crop highlights
   const renderInteractiveDocumentCanvas = (imageSrc: string | null, activeId: string) => {
     const activePins = pinsRecord[activeId] || [];
     const activeSelections = draggedSelections[activeId] || [];
     const hasImage = imageSrc && !imageLoadErrors[activeId];
+    const fileType = getFileType(imageSrc, activeId);
     
     return (
       <div 
         onMouseDown={previewTab === "raw" ? handleSelectionMouseDown : undefined}
         onMouseMove={previewTab === "raw" ? handleSelectionMouseMove : undefined}
         onMouseUp={previewTab === "raw" ? handleSelectionMouseUp : undefined}
-        className={`border border-slate-200 rounded-xl overflow-hidden flex justify-center items-center h-[520px] p-2 relative transition-all shadow-md ${
+        className={`border border-slate-200 rounded-xl overflow-hidden flex justify-center items-center p-2 relative transition-all shadow-md ${
           previewTab === "raw" 
-            ? "bg-slate-950 select-none cursor-crosshair group hover:border-indigo-400 hover:ring-2 hover:ring-indigo-100" 
-            : "bg-slate-900 select-text cursor-default"
+            ? "bg-slate-950 select-none cursor-crosshair group hover:border-indigo-400 hover:ring-2 hover:ring-indigo-100 h-[520px]" 
+            : "bg-slate-900 select-text cursor-default h-[720px]"
         }`}
       >
         {/* If using actual scan image or fallback, render it */}
-        {previewTab === "raw" && hasImage ? (
+        {previewTab === "raw" && fileType === "image" && hasImage ? (
           <img
             src={imageSrc!}
             onError={() => setImageLoadErrors(prev => ({ ...prev, [activeId]: true }))}
@@ -1060,44 +1070,106 @@ export default function BillScanner({
             className="max-h-full max-w-full object-contain select-none pointer-events-none"
             referrerPolicy="no-referrer"
           />
-        ) : previewTab === "raw" ? (
-          /* High-Fidelity Paper Voucher Mockup styled like actual client invoice/slip (fallback if no image) */
-          <div className="relative bg-white border border-slate-200 shadow-inner w-full h-full p-5 text-slate-800 select-none overflow-y-auto font-sans pointer-events-none">
-            <div className="absolute inset-0 bg-gradient-to-br from-transparent to-slate-50/20 opacity-40 pointer-events-none" />
-            
-            {/* Real invoice paper header */}
-            <div className="border-b-2 border-slate-900 pb-3 mb-4">
-              <div className="flex justify-between items-start">
-                <div className="text-left">
-                  <h4 className="font-extrabold text-[12.5px] text-slate-900 uppercase tracking-tight">
-                    {editSupplierName || "SATGURU INDUSTRIES LTD."}
-                  </h4>
-                  <p className="text-[8.5px] text-slate-500 font-mono">GSTIN: {singleScannedData?.supplierGSTIN || "07SATGURU001A1Z5"}</p>
-                  <p className="text-[8px] text-slate-400 mt-0.5">Plot No 4, Okhla Industrial Area Phase-III, New Delhi</p>
-                </div>
-                <div className="text-right">
-                  <span className="bg-slate-900 text-white text-[8px] font-bold font-mono px-2 py-0.5 rounded tracking-widest uppercase">
-                    {voucherType === "Sales" ? "SALES VOUCHER" : "PURCHASE INVOICE"}
-                  </span>
-                  <p className="text-[10px] font-mono font-black text-slate-850 uppercase mt-1">NO: {editInvoiceNo || "VCH-2026-098"}</p>
-                  <p className="text-[8px] text-slate-500 font-mono">Date: {editDate || "2026-06-21"}</p>
-                </div>
-              </div>
+        ) : previewTab === "raw" && fileType === "pdf" ? (
+          <div className="relative w-full h-full">
+            {/* Toggle tabs for raw vs converted PDF views */}
+            <div className="absolute top-2 left-2 z-20 flex gap-1.5 bg-slate-900/95 border border-slate-700 p-1 rounded-lg shadow-lg pointer-events-auto">
+              <button
+                type="button"
+                onClick={() => setPdfSubTab("converted")}
+                className={`text-[8.5px] font-black uppercase px-2 py-1 rounded transition-colors ${
+                  pdfSubTab === "converted"
+                    ? "bg-indigo-600 text-white font-black"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                📸 OCR Image Render
+              </button>
+              <button
+                type="button"
+                onClick={() => setPdfSubTab("raw")}
+                className={`text-[8.5px] font-black uppercase px-2 py-1 rounded transition-colors ${
+                  pdfSubTab === "raw"
+                    ? "bg-indigo-600 text-white font-black"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                🖥️ Native PDF Reader
+              </button>
             </div>
 
-            {/* Consignee segment */}
-            <div className="bg-slate-50 p-2 rounded border border-slate-150 mb-3 grid grid-cols-2 gap-2 text-[8px] text-slate-600 font-medium text-left">
-              <div>
-                <span className="block text-slate-450 font-mono font-bold uppercase text-[6.5px]">CONSIGNEE BILL TO</span>
-                <p className="font-bold text-slate-850">Radhe Radhe Bookkeeping Clients</p>
-                <p>Delhi City Office Branch, IN</p>
+            {pdfSubTab === "raw" ? (
+              <div className="w-full h-full bg-white rounded-lg p-1 overflow-hidden pointer-events-auto">
+                <iframe src={imageSrc!} className="w-full h-full rounded-lg bg-slate-100 border-none" title="PDF Document Viewer" />
               </div>
-              <div className="text-right">
-                <span className="block text-slate-455 font-mono font-bold uppercase text-[6.5px]">DELIVERY DESTINATION</span>
-                <p className="font-bold text-slate-850">Yashvika Retail Depot</p>
-                <p>New G.T. Road Transit Center, UP</p>
-              </div>
-            </div>
+            ) : (
+              /* Converted Simulated high-fidelity document layout with highlighted spots */
+              <div className="relative bg-white border border-slate-200 shadow-inner w-full h-full p-5 text-slate-800 select-none overflow-y-auto font-sans pointer-events-none">
+                <div className="absolute inset-0 bg-gradient-to-br from-transparent to-slate-50/20 opacity-40 pointer-events-none" />
+                
+                {/* Visual Scanner Active Watermark Badge */}
+                <div className="flex items-center justify-between border-b-2 border-slate-900 pb-2 mb-4">
+                  <div className="flex items-center gap-1">
+                    <span className="flex h-2 w-2 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                    </span>
+                    <span className="text-[8px] font-extrabold uppercase font-mono tracking-wider text-emerald-700">
+                      🔄 AI PDF-to-Image OCR Converter Active
+                    </span>
+                  </div>
+                  <span className="text-[7.5px] font-mono text-slate-400 uppercase">HIGH-FIDELITY VECTOR SCAN</span>
+                </div>
+
+                {/* Real invoice paper header */}
+                <div className="border-b border-slate-200 pb-3 mb-4">
+                  <div className="flex justify-between items-start">
+                    <div className="text-left space-y-2">
+                      {/* Dynamic highlighted borders for simulated scanner render */}
+                      <div className="relative border-2 border-dashed border-amber-400 bg-amber-500/10 px-2 py-1 rounded shadow-xs">
+                        <span className="absolute -top-3 left-1 bg-amber-600 text-white font-mono text-[6px] font-black uppercase px-1 rounded shadow-xs">
+                          Vendor Name (OCR)
+                        </span>
+                        <h4 className="font-extrabold text-[12px] text-slate-900 uppercase tracking-tight">
+                          {editSupplierName || "SATGURU INDUSTRIES LTD."}
+                        </h4>
+                      </div>
+                      <p className="text-[8.5px] text-slate-500 font-mono">GSTIN: {singleScannedData?.supplierGSTIN || "07SATGURU001A1Z5"}</p>
+                      <p className="text-[8px] text-slate-400 mt-0.5">Plot No 4, Okhla Industrial Area Phase-III, New Delhi</p>
+                    </div>
+                    <div className="text-right space-y-2 col-span-1">
+                      <span className="bg-slate-950 text-white text-[8px] font-bold font-mono px-2 py-0.5 rounded tracking-widest uppercase inline-block">
+                        {voucherType === "Sales" ? "SALES VOUCHER" : "PURCHASE INVOICE"}
+                      </span>
+                      <div className="relative border-2 border-dashed border-blue-400 bg-blue-500/10 px-1.5 py-1 rounded shadow-xs">
+                        <span className="absolute -top-3 right-1 bg-blue-600 text-white font-mono text-[6px] font-black uppercase px-1 rounded shadow-xs">
+                          Invoice No (OCR)
+                        </span>
+                        <p className="text-[10px] font-mono font-black text-slate-850 uppercase mt-0.5">NO: {editInvoiceNo || "VCH-2026-098"}</p>
+                      </div>
+                      <div className="relative border-2 border-dashed border-emerald-400 bg-emerald-500/10 px-1.5 py-1 rounded shadow-xs">
+                        <span className="absolute -top-3 right-1 bg-emerald-600 text-white font-mono text-[6px] font-black uppercase px-1 rounded shadow-xs">
+                          Date (OCR)
+                        </span>
+                        <p className="text-[8px] text-slate-500 font-mono mt-0.5">Date: {editDate || "2026-06-21"}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Consignee segment */}
+                <div className="bg-slate-50 p-2 rounded border border-slate-150 mb-3 grid grid-cols-2 gap-2 text-[8px] text-slate-600 font-medium text-left">
+                  <div>
+                    <span className="block text-slate-450 font-mono font-bold uppercase text-[6.5px]">CONSIGNEE BILL TO</span>
+                    <p className="font-bold text-slate-850">Radhe Radhe Bookkeeping Clients</p>
+                    <p>Delhi City Office Branch, IN</p>
+                  </div>
+                  <div className="text-right">
+                    <span className="block text-slate-455 font-mono font-bold uppercase text-[6.5px]">DELIVERY DESTINATION</span>
+                    <p className="font-bold text-slate-850">Yashvika Retail Depot</p>
+                    <p>New G.T. Road Transit Center, UP</p>
+                  </div>
+                </div>
 
             {/* Table of items inside the voucher paper mockup */}
             <table className="w-full text-left text-[9px] border-collapse mb-4">
@@ -1164,9 +1236,331 @@ export default function BillScanner({
               </div>
             </div>
           </div>
+            )}
+          </div>
+        ) : previewTab === "raw" && fileType === "excel" ? (
+          /* Excel Grid Mockup Layout */
+          <div className="relative bg-slate-100 border border-slate-300 shadow-inner w-full h-full p-4 text-slate-800 select-none overflow-auto font-sans pointer-events-none">
+            {/* Spreadsheet Title Bar */}
+            <div className="bg-emerald-800 text-white p-2 rounded-t-lg -mx-4 -mt-4 mb-3 flex items-center justify-between shadow-sm">
+              <div className="flex items-center gap-1.5">
+                <span className="text-sm">📊</span>
+                <span className="text-[10px] font-bold tracking-wider font-mono uppercase">AI Excel-to-Image OCR Mapper Active • Spreadsheet OCR Map</span>
+              </div>
+              <span className="bg-emerald-900 px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase border border-emerald-700">
+                .XLSX CONVERTED
+              </span>
+            </div>
+
+            {/* Grid Coordinates */}
+            <div className="grid grid-cols-[30px_1fr] border border-slate-300 bg-white rounded overflow-hidden">
+              {/* Row 0: Column Letters */}
+              <div className="bg-slate-200 border-r border-b border-slate-300 h-6 flex items-center justify-center font-mono font-bold text-[9px] text-slate-500"></div>
+              <div className="grid grid-cols-4 bg-slate-100 border-b border-slate-300 h-6 font-mono font-bold text-[9px] text-slate-500 divide-x divide-slate-300">
+                <div className="flex items-center pl-2">A (Variable Name)</div>
+                <div className="flex items-center pl-2 col-span-3">B (Extracted Document Value)</div>
+              </div>
+
+              {/* Rows */}
+              {/* Row 1: Document Title */}
+              <div className="bg-slate-200 border-r border-b border-slate-300 h-7 flex items-center justify-center font-mono font-bold text-[9px] text-slate-500">1</div>
+              <div className="flex items-center pl-3 bg-emerald-50/50 border-b border-slate-300 text-[10px] font-black text-emerald-900 col-span-4 tracking-wider uppercase">
+                🟢 SHEET1: INVOICE SPREADSHEET LEDGER EXTRACTION ROW
+              </div>
+
+              {/* Row 2: Vendor */}
+              <div className="bg-slate-200 border-r border-b border-slate-300 h-9 flex items-center justify-center font-mono font-bold text-[9px] text-slate-500">2</div>
+              <div className="grid grid-cols-4 border-b border-slate-300 divide-x divide-slate-300 h-9">
+                <div className="flex items-center pl-2 font-mono font-bold text-[9px] text-slate-600 bg-slate-50">Supplier Name</div>
+                <div className="flex items-center pl-3 col-span-3 bg-amber-50/70 border-2 border-dashed border-amber-400 font-extrabold text-slate-900 text-[10px]">
+                  {editSupplierName || "SATGURU INDUSTRIES LTD."}
+                </div>
+              </div>
+
+              {/* Row 3: Invoice No */}
+              <div className="bg-slate-200 border-r border-b border-slate-300 h-9 flex items-center justify-center font-mono font-bold text-[9px] text-slate-500">3</div>
+              <div className="grid grid-cols-4 border-b border-slate-300 divide-x divide-slate-300 h-9">
+                <div className="flex items-center pl-2 font-mono font-bold text-[9px] text-slate-600 bg-slate-50">Invoice No</div>
+                <div className="flex items-center pl-3 col-span-3 bg-blue-50/70 border-2 border-dashed border-blue-400 font-mono font-black text-slate-850 text-[9px] uppercase">
+                  {editInvoiceNo || "VCH-2026-098"}
+                </div>
+              </div>
+
+              {/* Row 4: Date */}
+              <div className="bg-slate-200 border-r border-b border-slate-300 h-9 flex items-center justify-center font-mono font-bold text-[9px] text-slate-500">4</div>
+              <div className="grid grid-cols-4 border-b border-slate-300 divide-x divide-slate-300 h-9">
+                <div className="flex items-center pl-2 font-mono font-bold text-[9px] text-slate-600 bg-slate-50">Invoice Date</div>
+                <div className="flex items-center pl-3 col-span-3 bg-emerald-50/70 border-2 border-dashed border-emerald-400 font-mono font-bold text-slate-800 text-[9px]">
+                  {editDate || "2026-06-21"}
+                </div>
+              </div>
+
+              {/* Row 5: GSTIN */}
+              <div className="bg-slate-200 border-r border-b border-slate-300 h-9 flex items-center justify-center font-mono font-bold text-[9px] text-slate-500">5</div>
+              <div className="grid grid-cols-4 border-b border-slate-300 divide-x divide-slate-300 h-9">
+                <div className="flex items-center pl-2 font-mono font-bold text-[9px] text-slate-600 bg-slate-50">GSTIN</div>
+                <div className="flex items-center pl-3 col-span-3 font-mono font-bold text-slate-850 text-[9px]">
+                  {singleScannedData?.supplierGSTIN || "07SATGURU001A1Z5"}
+                </div>
+              </div>
+
+              {/* Row 6: Item rows header */}
+              <div className="bg-slate-200 border-r border-b border-slate-300 h-7 flex items-center justify-center font-mono font-bold text-[9px] text-slate-500">6</div>
+              <div className="grid grid-cols-5 border-b border-slate-300 divide-x divide-slate-300 bg-slate-100 text-[8.5px] font-mono font-bold text-slate-600 col-span-4 h-7">
+                <div className="flex items-center pl-2 col-span-2">Item Name</div>
+                <div className="flex items-center justify-center">Qty</div>
+                <div className="flex items-center justify-end pr-2">Rate</div>
+                <div className="flex items-center justify-end pr-2">Total Amount</div>
+              </div>
+
+              {/* Row 7: Items list */}
+              <div className="bg-slate-200 border-r border-b border-slate-300 h-16 flex items-center justify-center font-mono font-bold text-[9px] text-slate-500">7</div>
+              <div className="col-span-4 bg-white border-b border-slate-300 overflow-y-auto max-h-24 pointer-events-auto">
+                <table className="w-full text-left text-[9px] border-collapse">
+                  <tbody>
+                    {singleScannedData?.items && singleScannedData.items.length > 0 ? (
+                      singleScannedData.items.map((item, idx) => (
+                        <tr key={idx} className="border-b border-slate-150 divide-x divide-slate-200 h-7">
+                          <td className="pl-2 w-2/5 font-bold text-slate-900">{item.localName}</td>
+                          <td className="text-center font-mono w-1/5">{item.quantity}</td>
+                          <td className="text-right pr-2 font-mono w-1/5">₹{item.rate.toFixed(2)}</td>
+                          <td className="text-right pr-2 font-mono font-bold text-indigo-700 w-1/5">₹{item.totalAmount.toFixed(2)}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr className="border-b border-slate-150 divide-x divide-slate-200 h-7 bg-amber-50/20">
+                        <td className="pl-2 w-2/5 font-bold text-slate-900">SOP Urea Special Fertilizer</td>
+                        <td className="text-center font-mono w-1/5">50</td>
+                        <td className="text-right pr-2 font-mono w-1/5">₹427.12</td>
+                        <td className="text-right pr-2 font-mono font-bold text-indigo-700 w-1/5">₹21355.93</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Row 8: Summary Total */}
+              <div className="bg-slate-200 border-r border-b border-slate-300 h-9 flex items-center justify-center font-mono font-bold text-[9px] text-slate-500">8</div>
+              <div className="grid grid-cols-4 border-b border-slate-300 divide-x divide-slate-300 h-9">
+                <div className="flex items-center pl-2 font-mono font-bold text-[9px] text-slate-600 bg-slate-50">Grand Total</div>
+                <div className="flex items-center pl-3 col-span-3 bg-purple-50 border-2 border-dashed border-purple-400 font-mono font-black text-indigo-900 text-[10px]">
+                  ₹{editTotalAmount ? editTotalAmount.toFixed(2) : "25200.00"}
+                </div>
+              </div>
+            </div>
+
+            {/* Verification Watermark */}
+            <div className="mt-4 flex items-center justify-between text-[8px] text-slate-400 font-mono">
+              <span>✔️ Verified by Sakhi AI Spreadsheet Engine</span>
+              <span>CELL COMPLIANCE PASS [100%]</span>
+            </div>
+          </div>
+        ) : previewTab === "raw" && fileType === "word" ? (
+          /* Word Document Mockup Layout */
+          <div className="relative bg-white border border-slate-200 shadow-inner w-full h-full p-6 text-slate-800 select-none overflow-y-auto font-serif pointer-events-none">
+            {/* Word Header */}
+            <div className="bg-blue-800 text-white p-2 rounded-t-lg -mx-6 -mt-6 mb-4 flex items-center justify-between shadow-sm">
+              <div className="flex items-center gap-1.5 font-sans">
+                <span className="text-sm">📝</span>
+                <span className="text-[10px] font-bold tracking-wider font-mono uppercase">AI Word-to-Image Document Parser Active • Text Schema OCR Map</span>
+              </div>
+              <span className="bg-blue-900 px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase border border-blue-700 font-sans">
+                .DOCX CONVERTED
+              </span>
+            </div>
+
+            <div className="border-b border-slate-300 pb-3 mb-4">
+              <h1 className="text-xl font-bold text-slate-900 font-serif leading-tight">OFFICIAL COMMERCIAL TRANSACTION LEDGER</h1>
+              <p className="text-[9px] text-slate-500 uppercase tracking-widest font-sans mt-1">Ref ID: {editInvoiceNo || "VCH-2026-098"}</p>
+            </div>
+
+            <p className="text-[10px] leading-relaxed text-slate-650 italic mb-4 font-serif">
+              "This transaction specification represents the official digitised commercial voucher recorded between the contracting parties. Under audit guidelines, the following parameters have been scanned, verified, and mapped to standard ERP schemas."
+            </p>
+
+            <div className="space-y-3 mb-5 font-sans text-[9px] text-left">
+              <div className="grid grid-cols-3 items-center border-b border-slate-100 pb-1.5">
+                <span className="font-bold text-slate-500 uppercase font-mono text-[8px]">CONTRACTING SUPPLIER:</span>
+                <span className="col-span-2 bg-amber-50 border-2 border-dashed border-amber-400 px-2 py-0.5 rounded font-bold text-slate-900">
+                  {editSupplierName || "SATGURU INDUSTRIES LTD."}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 items-center border-b border-slate-100 pb-1.5">
+                <span className="font-bold text-slate-500 uppercase font-mono text-[8px]">REGISTRATION ID (GSTIN):</span>
+                <span className="col-span-2 font-mono font-bold text-slate-800">
+                  {singleScannedData?.supplierGSTIN || "07SATGURU001A1Z5"}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 items-center border-b border-slate-100 pb-1.5">
+                <span className="font-bold text-slate-500 uppercase font-mono text-[8px]">VOUCHER REFERENCE NO:</span>
+                <span className="col-span-2 bg-blue-50 border-2 border-dashed border-blue-400 px-2 py-0.5 rounded font-mono font-black text-slate-800">
+                  {editInvoiceNo || "VCH-2026-098"}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 items-center border-b border-slate-100 pb-1.5">
+                <span className="font-bold text-slate-500 uppercase font-mono text-[8px]">TRANSACTION EXECUTION DATE:</span>
+                <span className="col-span-2 bg-emerald-50 border-2 border-dashed border-emerald-400 px-2 py-0.5 rounded font-mono font-bold text-slate-800">
+                  {editDate || "2026-06-21"}
+                </span>
+              </div>
+            </div>
+
+            {/* Line Items specification */}
+            <h4 className="text-[10px] font-bold text-slate-800 uppercase tracking-wide mb-2 font-sans">ANNEXURE A: ITEM-LEVEL TAX MATRIX</h4>
+            <table className="w-full text-left text-[9px] border-collapse font-sans mb-5">
+              <thead>
+                <tr className="border-b-2 border-slate-300 font-bold text-slate-500">
+                  <th className="py-1">Goods Description</th>
+                  <th className="py-1 text-center w-12">Qty</th>
+                  <th className="py-1 text-right w-20">Rate</th>
+                  <th className="py-1 text-right w-24">Taxable Amt</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 text-slate-650">
+                {singleScannedData?.items && singleScannedData.items.length > 0 ? (
+                  singleScannedData.items.map((it, idx) => (
+                    <tr key={idx}>
+                      <td className="py-1 font-bold text-slate-800">{it.localName}</td>
+                      <td className="py-1 text-center font-mono">{it.quantity}</td>
+                      <td className="py-1 text-right font-mono">₹{it.rate.toFixed(2)}</td>
+                      <td className="py-1 text-right font-mono">₹{it.taxableAmount.toFixed(2)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td className="py-1 font-bold text-slate-800">SOP Urea Special Fertilizer</td>
+                    <td className="py-1 text-center font-mono">50</td>
+                    <td className="py-1 text-right font-mono">₹427.12</td>
+                    <td className="py-1 text-right font-mono">₹21355.93</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+
+            {/* Totals and signature */}
+            <div className="border-t border-slate-200 pt-3 flex justify-between items-start font-sans">
+              <span className="text-[7px] text-slate-400 font-mono italic">Document converted from Microsoft Word (.docx) source file</span>
+              <div className="w-44 text-[9px] bg-slate-50 p-2 rounded border border-slate-150 space-y-1">
+                <div className="flex justify-between font-bold text-slate-900">
+                  <span>Grand Total amount:</span>
+                  <span className="font-mono text-indigo-700">₹{editTotalAmount ? editTotalAmount.toFixed(2) : "25200.00"}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : previewTab === "raw" ? (
+          /* High-Fidelity Paper Voucher Mockup styled like actual client invoice/slip (fallback if no image) */
+          <div className="relative bg-white border border-slate-200 shadow-inner w-full h-full p-5 text-slate-800 select-none overflow-y-auto font-sans pointer-events-none font-sans">
+            <div className="absolute inset-0 bg-gradient-to-br from-transparent to-slate-50/20 opacity-40 pointer-events-none" />
+            
+            {/* Real invoice paper header */}
+            <div className="border-b-2 border-slate-900 pb-3 mb-4">
+              <div className="flex justify-between items-start">
+                <div className="text-left">
+                  <h4 className="font-extrabold text-[12.5px] text-slate-900 uppercase tracking-tight">
+                    {editSupplierName || "SATGURU INDUSTRIES LTD."}
+                  </h4>
+                  <p className="text-[8.5px] text-slate-500 font-mono">GSTIN: {singleScannedData?.supplierGSTIN || "07SATGURU001A1Z5"}</p>
+                  <p className="text-[8px] text-slate-400 mt-0.5">Plot No 4, Okhla Industrial Area Phase-III, New Delhi</p>
+                </div>
+                <div className="text-right">
+                  <span className="bg-slate-900 text-white text-[8px] font-bold font-mono px-2 py-0.5 rounded tracking-widest uppercase">
+                    {voucherType === "Sales" ? "SALES VOUCHER" : "PURCHASE INVOICE"}
+                  </span>
+                  <p className="text-[10px] font-mono font-black text-slate-850 uppercase mt-1">NO: {editInvoiceNo || "VCH-2026-098"}</p>
+                  <p className="text-[8px] text-slate-500 font-mono">Date: {editDate || "2026-06-21"}</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Consignee segment */}
+            <div className="bg-slate-50 p-2 rounded border border-slate-150 mb-3 grid grid-cols-2 gap-2 text-[8px] text-slate-600 font-medium text-left">
+              <div>
+                <span className="block text-slate-450 font-mono font-bold uppercase text-[6.5px]">CONSIGNEE BILL TO</span>
+                <p className="font-bold text-slate-850">Radhe Radhe Bookkeeping Clients</p>
+                <p>Delhi City Office Branch, IN</p>
+              </div>
+              <div className="text-right">
+                <span className="block text-slate-455 font-mono font-bold uppercase text-[6.5px]">DELIVERY DESTINATION</span>
+                <p className="font-bold text-slate-850">Yashvika Retail Depot</p>
+                <p>New G.T. Road Transit Center, UP</p>
+              </div>
+            </div>
+            {/* Table of items inside the voucher paper mockup */}
+            <table className="w-full text-left text-[9px] border-collapse mb-4">
+              <thead>
+                <tr className="border-b-2 border-slate-400 font-bold text-slate-500">
+                  <th className="py-1">Description of Goods</th>
+                  <th className="py-1 text-center w-12">HSN</th>
+                  <th className="py-1 text-right w-16">Quantity</th>
+                  <th className="py-1 text-right w-20">Rate</th>
+                  <th className="py-1 text-right w-24">Taxable Amt</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-150 text-slate-700">
+                {singleScannedData?.items && singleScannedData.items.length > 0 ? (
+                  singleScannedData.items.map((item, idx) => (
+                    <tr key={idx}>
+                      <td className="py-1.5 font-bold text-slate-900">{item.localName}</td>
+                      <td className="py-1.5 text-center font-mono">{item.hsnCode || "3102"}</td>
+                      <td className="py-1.5 text-right font-mono">{item.quantity}</td>
+                      <td className="py-1.5 text-right font-mono">₹{item.rate.toFixed(2)}</td>
+                      <td className="py-1.5 text-right font-mono font-bold text-indigo-900">₹{item.taxableAmount.toFixed(2)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td className="py-1.5 font-bold text-slate-900">SOP Urea Special Nitrogen fertilizer</td>
+                    <td className="py-1.5 text-center font-mono">3102</td>
+                    <td className="py-1.5 text-right font-mono">50</td>
+                    <td className="py-1.5 text-right font-mono">₹427.12</td>
+                    <td className="py-1.5 text-right font-mono font-bold text-indigo-900">₹21355.93</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+
+            {/* Totals on voucher paper mockup */}
+            <div className="border-t border-slate-300 pt-2 flex justify-end">
+              <div className="w-48 text-[9px] space-y-1">
+                <div className="flex justify-between text-slate-600">
+                  <span>Gross Taxable Subtotal:</span>
+                  <span className="font-mono">₹{editTaxableAmount ? editTaxableAmount.toFixed(2) : "21355.93"}</span>
+                </div>
+                <div className="flex justify-between text-slate-600">
+                  <span>Integrated GST (IGST):</span>
+                  <span className="font-mono">₹{editGstAmount ? editGstAmount.toFixed(2) : "3844.07"}</span>
+                </div>
+                <div className="flex justify-between border-t border-slate-200 pt-1 font-bold text-slate-900 text-[10px]">
+                  <span>Voucher Grand Total:</span>
+                  <span className="font-mono text-indigo-700">₹{editTotalAmount ? editTotalAmount.toFixed(2) : "25200.00"}</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Decal authenticity seal */}
+            <div className="mt-6 flex justify-between items-center opacity-85">
+              <div className="border border-indigo-200 bg-indigo-50/50 p-1.5 rounded text-[7px] text-indigo-800">
+                ✔️ AI Compliance Checked & Verified
+              </div>
+              <div className="text-right text-[7.5px] text-slate-400">
+                <p>Authorized Signatory</p>
+                <div className="h-6 w-16 bg-slate-100 border border-dashed border-slate-300 rounded mt-1 ml-auto flex items-center justify-center text-[6.5px] font-mono select-none">
+                  [REVENUE STAMP]
+                </div>
+              </div>
+            </div>
+          </div>
         ) : (
           /* Organized Ledger Layout - High-Fidelity Spreadsheet showing all schema columns mapped live */
           <div className="relative bg-slate-900 w-full h-full p-4 text-slate-200 overflow-auto font-sans flex flex-col rounded-lg select-text pointer-events-auto">
+            <style>{`
+              .dense-spreadsheet th, .dense-spreadsheet td {
+                padding: 4px 6px !important;
+                font-size: 9px !important;
+                line-height: 1.2 !important;
+              }
+            `}</style>
             <div className="flex items-center justify-between pb-3 border-b border-slate-700/80 mb-3 flex-wrap gap-2 shrink-0">
               <div className="flex items-center gap-2">
                 <span className="flex h-2.5 w-2.5 relative">
@@ -1186,47 +1580,47 @@ export default function BillScanner({
             <div className="flex-1 overflow-auto bg-slate-950 border border-slate-800 rounded-lg custom-scrollbar">
               {voucherType === "Sales" ? (
                 /* SALES SCHEMA COLUMNS TABLE */
-                <table className="w-full text-left text-[11px] border-collapse text-slate-300 whitespace-nowrap">
-                  <thead className="bg-slate-900 border-b border-slate-800 text-[9px] uppercase tracking-wider text-slate-400 font-mono sticky top-0 z-10">
+                <table className="dense-spreadsheet w-full text-left text-[10px] border-collapse text-slate-300 whitespace-nowrap">
+                  <thead className="bg-slate-900 border-b border-slate-800 text-[8.5px] uppercase tracking-wider text-slate-400 font-mono sticky top-0 z-10">
                     <tr>
-                      <th className="p-2.5 border-r border-slate-800 bg-slate-900 text-center text-slate-500 w-8">#</th>
-                      <th className="p-2.5 border-r border-slate-800 text-amber-400 font-bold bg-slate-900/60">SERIES</th>
-                      <th className="p-2.5 border-r border-slate-800 text-emerald-400 font-bold bg-slate-900/60">DATE</th>
-                      <th className="p-2.5 border-r border-slate-800 text-blue-400 font-bold bg-slate-900/60">Invoice No</th>
-                      <th className="p-2.5 border-r border-slate-800 text-purple-400 font-bold bg-slate-900/60">SALE TYPE</th>
-                      <th className="p-2.5 border-r border-slate-800 text-pink-400 font-bold bg-slate-900/60">GSTIN</th>
-                      <th className="p-2.5 border-r border-slate-800 text-sky-400 font-bold bg-slate-900/60">PARTY NAME</th>
-                      <th className="p-2.5 border-r border-slate-800">FOR / MOTOR CUT</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">TOTAL FREIGHT</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">ADVANCE FREIGHT</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">BALANCE FREIGHT</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">ADVANCE (CASH)</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">ADVANCE (BANK)</th>
-                      <th className="p-2.5 border-r border-slate-800 text-orange-400 font-bold bg-slate-900/60">ITEMS</th>
-                      <th className="p-2.5 border-r border-slate-800 text-center">Qty</th>
-                      <th className="p-2.5 border-r border-slate-800 text-center">Unit</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right text-indigo-400 font-bold bg-slate-900/60">Amount</th>
-                      <th className="p-2.5 border-r border-slate-800">Bs-1</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">BS Amout-1</th>
-                      <th className="p-2.5 border-r border-slate-800">Bs-2</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">BS Amout-2</th>
-                      <th className="p-2.5 border-r border-slate-800">Bs-3</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">BS Amout-3</th>
-                      <th className="p-2.5 border-r border-slate-800">settlement account</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">settlement amount</th>
-                      <th className="p-2.5 border-r border-slate-800">settlement narration</th>
-                      <th className="p-2.5 border-r border-slate-800">Bill by Bill-debtors</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">bill ref amount</th>
-                      <th className="p-2.5 border-r border-slate-800">bill ref due date</th>
-                      <th className="p-2.5 border-r border-slate-800">Bill by Bill-transport</th>
-                      <th className="p-2.5 border-r border-slate-800 text-right">bill ref amount-transport</th>
-                      <th className="p-2.5 border-r border-slate-800">bill ref due date-transport</th>
-                      <th className="p-2.5 border-r border-slate-800">transporter</th>
-                      <th className="p-2.5 border-r border-slate-800">GR/R No.</th>
-                      <th className="p-2.5 border-r border-slate-800">GR Date</th>
-                      <th className="p-2.5 border-r border-slate-800">Vehicle No.</th>
-                      <th className="p-2.5 border-r border-slate-800">Station</th>
-                      <th className="p-2.5">pin code</th>
+                      <th className="p-1 px-2 border-r border-slate-800 bg-slate-900 text-center text-slate-500 w-8">#</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-amber-400 font-bold bg-slate-900/60">SERIES</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-emerald-400 font-bold bg-slate-900/60">DATE</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-blue-400 font-bold bg-slate-900/60">Invoice No</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-purple-400 font-bold bg-slate-900/60">SALE TYPE</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-pink-400 font-bold bg-slate-900/60">GSTIN</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-sky-400 font-bold bg-slate-900/60">PARTY NAME</th>
+                      <th className="p-1 px-2 border-r border-slate-800">FOR / MOTOR CUT</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">TOTAL FREIGHT</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">ADVANCE FREIGHT</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">BALANCE FREIGHT</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">ADVANCE (CASH)</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">ADVANCE (BANK)</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-orange-400 font-bold bg-slate-900/60">ITEMS</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-center">Qty</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-center">Unit</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right text-indigo-400 font-bold bg-slate-900/60">Amount</th>
+                      <th className="p-1 px-2 border-r border-slate-800">Bs-1</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">BS Amout-1</th>
+                      <th className="p-1 px-2 border-r border-slate-800">Bs-2</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">BS Amout-2</th>
+                      <th className="p-1 px-2 border-r border-slate-800">Bs-3</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">BS Amout-3</th>
+                      <th className="p-1 px-2 border-r border-slate-800">settlement account</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">settlement amount</th>
+                      <th className="p-1 px-2 border-r border-slate-800">settlement narration</th>
+                      <th className="p-1 px-2 border-r border-slate-800">Bill by Bill-debtors</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">bill ref amount</th>
+                      <th className="p-1 px-2 border-r border-slate-800">bill ref due date</th>
+                      <th className="p-1 px-2 border-r border-slate-800">Bill by Bill-transport</th>
+                      <th className="p-1 px-2 border-r border-slate-800 text-right">bill ref amount-transport</th>
+                      <th className="p-1 px-2 border-r border-slate-800">bill ref due date-transport</th>
+                      <th className="p-1 px-2 border-r border-slate-800">transporter</th>
+                      <th className="p-1 px-2 border-r border-slate-800">GR/R No.</th>
+                      <th className="p-1 px-2 border-r border-slate-800">GR Date</th>
+                      <th className="p-1 px-2 border-r border-slate-800">Vehicle No.</th>
+                      <th className="p-1 px-2 border-r border-slate-800">Station</th>
+                      <th className="p-1 px-2">pin code</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800 font-mono text-[10px]">
@@ -1292,8 +1686,8 @@ export default function BillScanner({
                 </table>
               ) : (
                 /* PURCHASE SCHEMA COLUMNS TABLE */
-                <table className="w-full text-left text-[11px] border-collapse text-slate-300 whitespace-nowrap">
-                  <thead className="bg-slate-900 border-b border-slate-800 text-[9px] uppercase tracking-wider text-slate-400 font-mono sticky top-0 z-10">
+                <table className="dense-spreadsheet w-full text-left text-[10px] border-collapse text-slate-300 whitespace-nowrap">
+                  <thead className="bg-slate-900 border-b border-slate-800 text-[8.5px] uppercase tracking-wider text-slate-400 font-mono sticky top-0 z-10">
                     <tr>
                       <th className="p-2.5 border-r border-slate-800 bg-slate-900 text-center text-slate-500 w-8">#</th>
                       <th className="p-2.5 border-r border-slate-800 text-amber-400 font-bold bg-slate-900/60">SERIES</th>
@@ -1515,20 +1909,223 @@ export default function BillScanner({
   const pins = selectedQueueItemId ? (pinsRecord[selectedQueueItemId] || []) : [];
   const voucherType = selectedQueueItemId ? (voucherTypesRecord[selectedQueueItemId] || "Purchase") : "Purchase";
 
+  // Find columns list for schema based on voucherType ("Purchase" or "Sales")
+  const getActiveSchemaColumns = () => {
+    const list = sheetSchemaMappings || [];
+    // Fallback if prop not loaded/provided: read from localStorage
+    const activeList = list.length > 0 ? list : JSON.parse(localStorage.getItem("radha_sheet_schema_mappings") || "[]");
+    
+    // Find schema that matches "Purchase" or "Sales" depending on voucherType
+    const matchingSchema = activeList.find((schema: any) => {
+      const name = (schema.schemaName || "").toLowerCase();
+      if (voucherType === "Sales") {
+        return name.includes("sales");
+      } else {
+        return name.includes("purchase");
+      }
+    });
+
+    if (matchingSchema && matchingSchema.columnsList) {
+      // Split by comma and clean up whitespace
+      return matchingSchema.columnsList
+        .split(",")
+        .map((col: string) => col.trim())
+        .filter((col: string) => col.length > 0);
+    }
+
+    // Default fallbacks if no schema matches
+    if (voucherType === "Sales") {
+      return [
+        "SERIES", "DATE", "Invoice No", "SALE TYPE", "GSTIN", "PARTY NAME", 
+        "FOR / MOTOR CUT", "TOTAL FREIGHT", "ADVANCE FREIGHT", "BALANCE FREIGHT", 
+        "ADVANCE (CASH)", "ADVANCE (BANK)", "ITEMS", "Qty", "Unit", "Amount", 
+        "Bs-1", "BS Amout-1", "Bs-2", "BS Amout-2", "Bs-3", "BS Amout-3", 
+        "settlement account", "settlement amount", "settlement narration", 
+        "Bill by Bill-debtors", "bill ref amount", "bill ref due date", 
+        "Bill by Bill-transport", "bill ref amount-transport", "bill ref due date-transport", 
+        "transporter", "GR/R No.", "GR Date", "Vehicle No.", "Station", "pin code"
+      ];
+    } else {
+      return [
+        "SERIES", "DATE", "VCH NO", "PURCHASE TYPE", "PARTY NAME", "TYPE OF DEALER", 
+        "BILLED PARTY", "ADDERESS", "STATE", "GSTIN", "ITEM NAME", "QTY", "UNIT", 
+        "AMOUNT", "BS_NAME", "BS_AMOUNT", "Bill Link (Drive)", "Status (Draft/Final)"
+      ];
+    }
+  };
+
+  const getDynamicSchemaTableHtml = (isSales: boolean, activeItems: any[], activeGSTIN: string) => {
+    // Get the active columns list from our active schema
+    const cols = getActiveSchemaColumns();
+    
+    // We will build the thead first
+    const ths = cols.map((col) => {
+      // Add colors to match the screenshot or styling
+      let style = "";
+      const colNorm = col.toLowerCase();
+      if (colNorm.includes("series")) style = 'style="color: #d97706"';
+      else if (colNorm.includes("date")) style = 'style="color: #15803d"';
+      else if (colNorm.includes("invoice") || colNorm.includes("vch")) style = 'style="color: #1d4ed8"';
+      else if (colNorm.includes("type")) style = 'style="color: #7c3aed"';
+      else if (colNorm.includes("gstin")) style = 'style="color: #be185d"';
+      else if (colNorm.includes("party")) style = 'style="color: #0369a1"';
+      else if (colNorm.includes("item")) style = 'style="color: #c2410c"';
+      else if (colNorm.includes("amount") || colNorm.includes("total")) style = 'style="text-align: right"';
+      
+      return `<th ${style}>${col}</th>`;
+    });
+
+    // Build the tds for the single row in tbody
+    const tds = cols.map((col) => {
+      const colNorm = col.toLowerCase();
+      
+      if (colNorm === "series") {
+        return `<td style="color: #b45309">A</td>`;
+      }
+      if (colNorm === "date") {
+        return `<td class="highlight-date">${editDate || "N/A"}</td>`;
+      }
+      if (colNorm.includes("invoice") || colNorm.includes("vch no") || colNorm === "vch_no") {
+        return `<td class="highlight-invoice">${editInvoiceNo || "N/A"}</td>`;
+      }
+      if (colNorm.includes("type")) {
+        const ratePercent = editGstAmount && editTaxableAmount ? Math.round((editGstAmount / editTaxableAmount) * 100) : 18;
+        return `<td style="color: #6d28d9">GST ${ratePercent}%</td>`;
+      }
+      if (colNorm === "gstin") {
+        return `<td class="highlight-gst">${activeGSTIN || "N/A"}</td>`;
+      }
+      if (colNorm.includes("party")) {
+        return `<td class="highlight-party">${editSupplierName || "N/A"}</td>`;
+      }
+      if (colNorm === "billed party") {
+        return `<td>Radhe Radhe Bookkeeping Clients</td>`;
+      }
+      if (colNorm === "address" || colNorm === "adderess") {
+        return `<td style="font-family: sans-serif">Delhi City Office Branch, IN</td>`;
+      }
+      if (colNorm === "state") {
+        return `<td>Haryana</td>`;
+      }
+      if (colNorm === "type of dealer") {
+        return `<td>${activeGSTIN ? "Registered" : "Unregistered"}</td>`;
+      }
+      if (colNorm === "items" || colNorm === "item name") {
+        const itemsStr = activeItems.length > 0 ? activeItems.map((it: any) => it.localName).join(", ") : "SOP Urea Fertilizer";
+        return `<td style="color: #ea580c">${itemsStr}</td>`;
+      }
+      if (colNorm === "qty") {
+        const qtySum = activeItems.length > 0 ? activeItems.reduce((acc: number, it: any) => acc + (it.quantity || 0), 0) : 50;
+        return `<td style="text-align: center">${qtySum}</td>`;
+      }
+      if (colNorm === "unit") {
+        return `<td style="text-align: center">PCS</td>`;
+      }
+      if (colNorm === "amount" || colNorm === "taxable amount") {
+        return `<td class="highlight-amount">₹${editTaxableAmount ? editTaxableAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "0.00"}</td>`;
+      }
+      if (colNorm === "bs-1" || colNorm === "bs_name") {
+        return `<td>${isSales ? "CGST" : "CGST/SGST"}</td>`;
+      }
+      if (colNorm === "bs amout-1" || colNorm === "bs_amount") {
+        const val = isSales ? (editGstAmount / 2) : editGstAmount;
+        return `<td style="text-align: right; color: #be185d">₹${val ? val.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "0.00"}</td>`;
+      }
+      if (colNorm === "bs-2") {
+        return `<td>SGST</td>`;
+      }
+      if (colNorm === "bs amout-2") {
+        const val = editGstAmount / 2;
+        return `<td style="text-align: right; color: #be185d">₹${val ? val.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "0.00"}</td>`;
+      }
+      if (colNorm === "bs-3") {
+        return `<td>IGST</td>`;
+      }
+      if (colNorm === "bs amout-3") {
+        return `<td style="text-align: right">₹0.00</td>`;
+      }
+      if (colNorm === "settlement account") {
+        return `<td style="color: #15803d">Cash</td>`;
+      }
+      if (colNorm === "settlement amount") {
+        return `<td class="highlight-amount" style="color: #15803d">₹${editTotalAmount ? editTotalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 }) : "0.00"}</td>`;
+      }
+      if (colNorm === "settlement narration") {
+        return `<td>Auto synced by Sakhi</td>`;
+      }
+      if (colNorm === "bill link (drive)" || colNorm.includes("link")) {
+        const link = getMatchedClientFolderLink(editSupplierName, activeGSTIN || "");
+        return `<td style="color: #2563eb; text-decoration: underline">
+          <a href="${link}" target="_blank" rel="noreferrer" style="color: #2563eb;">
+            ${link.replace("https://drive.google.com/drive/folders/", "Drive: ")}
+          </a>
+        </td>`;
+      }
+      if (colNorm.includes("status")) {
+        return `<td><span style="color: #b45309; background: rgba(245, 158, 11, 0.1); padding: 2px 6px; border-radius: 4px; font-weight: bold;">DRAFT</span></td>`;
+      }
+      if (colNorm === "vehicle no.") {
+        return `<td>HR-55-A-1234</td>`;
+      }
+      if (colNorm === "station") {
+        return `<td>Delhi</td>`;
+      }
+      if (colNorm === "pin code") {
+        return `<td>110001</td>`;
+      }
+      if (colNorm === "transporter") {
+        return `<td>Self</td>`;
+      }
+      
+      // Default fallback for any unmapped columns
+      if (colNorm.includes("amount") || colNorm.includes("total") || colNorm.includes("freight")) {
+        return `<td style="text-align: right">₹0.00</td>`;
+      }
+      return `<td>N/A</td>`;
+    });
+
+    return `
+      <table>
+        <thead>
+          <tr>
+            <th>#</th>
+            ${ths.join("\n")}
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="color: #475569">1</td>
+            ${tds.join("\n")}
+          </tr>
+        </tbody>
+      </table>
+    `;
+  };
+
   const handleDocumentImageClick = (e: React.MouseEvent<HTMLDivElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const clickX = ((e.clientX - rect.left) / rect.width) * 100;
     const clickY = ((e.clientY - rect.top) / rect.height) * 100;
     
     setActiveClickCoords({ x: clickX, y: clickY });
-    // Default the text input to modern parsed value placeholder helper
-    if (selectedSpotField === "supplierName") setSpotFieldInputValue(editSupplierName);
-    else if (selectedSpotField === "invoiceNo") setSpotFieldInputValue(editInvoiceNo);
-    else if (selectedSpotField === "date") setSpotFieldInputValue(editDate);
-    else if (selectedSpotField === "taxableAmount") setSpotFieldInputValue(String(editTaxableAmount || ""));
-    else if (selectedSpotField === "gstAmount") setSpotFieldInputValue(String(editGstAmount || ""));
-    else if (selectedSpotField === "totalAmount") setSpotFieldInputValue(String(editTotalAmount || ""));
-    else setSpotFieldInputValue("");
+    
+    // Default the text input to modern parsed value placeholder helper based on dynamic column content
+    const fieldLower = selectedSpotField.toLowerCase();
+    if (fieldLower.includes("party") || fieldLower.includes("supplier") || fieldLower === "vendor") {
+      setSpotFieldInputValue(editSupplierName);
+    } else if (fieldLower.includes("invoice") || fieldLower.includes("vch no") || fieldLower === "vch_no") {
+      setSpotFieldInputValue(editInvoiceNo);
+    } else if (fieldLower.includes("date")) {
+      setSpotFieldInputValue(editDate);
+    } else if (fieldLower.includes("taxable") || fieldLower === "amount" || fieldLower === "subtotal" || fieldLower === "taxable amount") {
+      setSpotFieldInputValue(String(editTaxableAmount || ""));
+    } else if (fieldLower.includes("gst") || fieldLower === "bs_amount" || fieldLower === "cgst" || fieldLower === "sgst" || fieldLower === "igst") {
+      setSpotFieldInputValue(String(editGstAmount || ""));
+    } else if (fieldLower.includes("total") || fieldLower === "grand total" || fieldLower === "settlement amount") {
+      setSpotFieldInputValue(String(editTotalAmount || ""));
+    } else {
+      setSpotFieldInputValue("");
+    }
   };
 
   const handleConfirmSpotMapping = () => {
@@ -1538,7 +2135,7 @@ export default function BillScanner({
       id: "pin_" + Date.now(),
       x: activeClickCoords.x,
       y: activeClickCoords.y,
-      fieldName: selectedSpotField === "supplierName" ? "Vendor" : selectedSpotField === "invoiceNo" ? "Inv No" : selectedSpotField === "date" ? "Date" : selectedSpotField === "taxableAmount" ? "Taxable" : selectedSpotField === "gstAmount" ? "GST" : "Total",
+      fieldName: selectedSpotField,
       value: spotFieldInputValue
     };
 
@@ -1548,13 +2145,21 @@ export default function BillScanner({
       [selectedQueueItemId]: [...(prev[selectedQueueItemId] || []), newPin]
     }));
 
-    // Also sync back the text to our form state
-    if (selectedSpotField === "supplierName") setEditSupplierName(spotFieldInputValue);
-    else if (selectedSpotField === "invoiceNo") setEditInvoiceNo(spotFieldInputValue);
-    else if (selectedSpotField === "date") setEditDate(spotFieldInputValue);
-    else if (selectedSpotField === "taxableAmount") setEditTaxableAmount(Number(spotFieldInputValue) || 0);
-    else if (selectedSpotField === "gstAmount") setEditGstAmount(Number(spotFieldInputValue) || 0);
-    else if (selectedSpotField === "totalAmount") setEditTotalAmount(Number(spotFieldInputValue) || 0);
+    // Also sync back the text to our form state based on dynamic field mapping match
+    const fieldLower = selectedSpotField.toLowerCase();
+    if (fieldLower.includes("party") || fieldLower.includes("supplier") || fieldLower === "vendor") {
+      setEditSupplierName(spotFieldInputValue);
+    } else if (fieldLower.includes("invoice") || fieldLower.includes("vch no") || fieldLower === "vch_no") {
+      setEditInvoiceNo(spotFieldInputValue);
+    } else if (fieldLower.includes("date")) {
+      setEditDate(spotFieldInputValue);
+    } else if (fieldLower.includes("taxable") || fieldLower === "amount" || fieldLower === "subtotal" || fieldLower === "taxable amount") {
+      setEditTaxableAmount(Number(spotFieldInputValue) || 0);
+    } else if (fieldLower.includes("gst") || fieldLower === "bs_amount" || fieldLower === "cgst" || fieldLower === "sgst" || fieldLower === "igst") {
+      setEditGstAmount(Number(spotFieldInputValue) || 0);
+    } else if (fieldLower.includes("total") || fieldLower === "grand total" || fieldLower === "settlement amount") {
+      setEditTotalAmount(Number(spotFieldInputValue) || 0);
+    }
 
     // Reset coordinates picker
     setActiveClickCoords(null);
@@ -1765,6 +2370,8 @@ export default function BillScanner({
   // Convert File to Base64 (Single)
   const handleSingleFile = (file: File) => {
     if (!file) return;
+    setSingleFileName(file.name);
+    setSingleFileType(file.type);
     const reader = new FileReader();
     reader.onload = async () => {
       const base64String = (reader.result as string).split(",")[1];
@@ -2726,10 +3333,13 @@ export default function BillScanner({
 
                     <div className="p-4">
                       {/* Side by side columns: PREVIEW on left, details on right */}
-                      <div className="grid grid-cols-1 md:grid-cols-12 gap-5 items-start">
+                      <div id="batch-workspace-container" ref={containerRef} className="flex flex-col lg:flex-row gap-5 items-start relative select-none" style={{ cursor: isResizing ? "col-resize" : "auto" }}>
                         
-                        {/* LEFT COLUMN: Pure Document Preview & Pin Overlay (md:col-span-7) */}
-                        <div className="md:col-span-12 lg:col-span-7 space-y-3">
+                        {/* LEFT COLUMN: Pure Document Preview & Pin Overlay */}
+                        <div 
+                          className="w-full lg:shrink-0 space-y-3"
+                          style={{ width: isLargeScreen ? `${leftWidth}%` : "100%" }}
+                        >
                           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 bg-slate-50 p-2 rounded-lg border border-slate-150">
                             <div className="flex items-center gap-1.5 justify-between w-full sm:w-auto">
                               <span className="text-[10px] text-slate-500 font-mono font-bold uppercase tracking-wider block">
@@ -2838,21 +3448,22 @@ export default function BillScanner({
                                     onChange={(e) => {
                                       const field = e.target.value;
                                       setSelectedSpotField(field);
-                                      if (field === "supplierName") setSpotFieldInputValue(editSupplierName);
-                                      else if (field === "invoiceNo") setSpotFieldInputValue(editInvoiceNo);
-                                      else if (field === "date") setSpotFieldInputValue(editDate);
-                                      else if (field === "taxableAmount") setSpotFieldInputValue(String(editTaxableAmount || ""));
-                                      else if (field === "gstAmount") setSpotFieldInputValue(String(editGstAmount || ""));
-                                      else if (field === "totalAmount") setSpotFieldInputValue(String(editTotalAmount || ""));
+                                      const fieldLower = field.toLowerCase();
+                                      if (fieldLower.includes("party") || fieldLower.includes("supplier") || fieldLower === "vendor") setSpotFieldInputValue(editSupplierName);
+                                      else if (fieldLower.includes("invoice") || fieldLower.includes("vch no") || fieldLower === "vch_no") setSpotFieldInputValue(editInvoiceNo);
+                                      else if (fieldLower.includes("date")) setSpotFieldInputValue(editDate);
+                                      else if (fieldLower.includes("taxable") || fieldLower === "amount" || fieldLower === "subtotal" || fieldLower === "taxable amount") setSpotFieldInputValue(String(editTaxableAmount || ""));
+                                      else if (fieldLower.includes("gst") || fieldLower === "bs_amount" || fieldLower === "cgst" || fieldLower === "sgst" || fieldLower === "igst") setSpotFieldInputValue(String(editGstAmount || ""));
+                                      else if (fieldLower.includes("total") || fieldLower === "grand total" || fieldLower === "settlement amount") setSpotFieldInputValue(String(editTotalAmount || ""));
+                                      else setSpotFieldInputValue("");
                                     }}
                                     className="bg-white border border-amber-305 rounded-md text-[11px] py-1 px-1.5 w-full font-mono text-slate-800 font-semibold focus:outline-none focus:border-indigo-500"
                                   >
-                                    <option value="supplierName">🏢 Vendor / Supplier Name</option>
-                                    <option value="invoiceNo">🎫 Invoice / Bill No.</option>
-                                    <option value="date">📅 Invoice Posting Date</option>
-                                    <option value="taxableAmount">💰 Taxable Sub-Total</option>
-                                    <option value="gstAmount">🟣 GST Tax Credits</option>
-                                    <option value="totalAmount">💵 Grand Invoice Total</option>
+                                    {getActiveSchemaColumns().map((col) => (
+                                      <option key={col} value={col}>
+                                        ✨ {col}
+                                      </option>
+                                    ))}
                                   </select>
                                 </div>
 
@@ -2881,8 +3492,27 @@ export default function BillScanner({
                           )}
                         </div>
 
-                        {/* RIGHT COLUMN: Extracted Edit Form Values (md:col-span-5) */}
-                        <div className="md:col-span-5 space-y-4 border-l border-slate-100 pl-4">
+                        {/* Draggable Resizer Separator */}
+                        {isLargeScreen && (
+                          <div
+                            onMouseDown={handleDragMouseDown}
+                            className={`w-2.5 hover:w-3.5 hover:bg-indigo-500/80 bg-slate-100 border-l border-r border-slate-200/50 cursor-col-resize self-stretch flex items-center justify-center transition-all duration-150 relative group rounded-md ${
+                              isResizing ? "bg-indigo-600/90 w-3.5" : ""
+                            }`}
+                            style={{ touchAction: "none" }}
+                            title="Drag to resize panels"
+                          >
+                            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white text-slate-700 rounded-full border border-slate-350 p-1 shadow-md group-hover:scale-110 transition-transform flex items-center justify-center w-6 h-6 select-none font-bold text-[11px] z-20">
+                              ↔️
+                            </div>
+                          </div>
+                        )}
+
+                        {/* RIGHT COLUMN: Extracted Edit Form Values */}
+                        <div 
+                          className="w-full space-y-4 pl-0 lg:pl-1"
+                          style={{ width: isLargeScreen ? `${100 - leftWidth}%` : "100%" }}
+                        >
                           <span className="text-[10px] text-indigo-700 font-mono font-bold uppercase tracking-wider block">
                             ✍️ Correct Extracted OCR Values
                           </span>
@@ -3322,10 +3952,13 @@ export default function BillScanner({
               ) : singleScannedData ? (
                 <div className="space-y-4">
                   {/* Grid Container */}
-                  <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+                  <div id="single-workspace-container" ref={containerRef} className="flex flex-col lg:flex-row gap-5 items-start relative select-none" style={{ cursor: isResizing ? "col-resize" : "auto" }}>
                     
                     {/* LEFT COLUMN: Original Voucher Preview or Organized Ledger Layout */}
-                    <div className="lg:col-span-7 space-y-3">
+                    <div 
+                      className="w-full lg:shrink-0 space-y-3"
+                      style={{ width: isLargeScreen ? `${leftWidth}%` : "100%" }}
+                    >
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1.5 bg-slate-50 p-2 rounded-lg border border-slate-150">
                         <div className="flex items-center gap-1.5 justify-between w-full sm:w-auto">
                           <span className="text-[10px] text-slate-500 font-mono font-bold uppercase tracking-wider block">
@@ -3407,8 +4040,27 @@ export default function BillScanner({
                       </div>
                     </div>
 
+                    {/* Draggable Resizer Separator */}
+                    {isLargeScreen && (
+                      <div
+                        onMouseDown={handleDragMouseDown}
+                        className={`w-2.5 hover:w-3.5 hover:bg-indigo-500/80 bg-slate-100 border-l border-r border-slate-200/50 cursor-col-resize self-stretch flex items-center justify-center transition-all duration-150 relative group rounded-md ${
+                          isResizing ? "bg-indigo-600/90 w-3.5" : ""
+                        }`}
+                        style={{ touchAction: "none" }}
+                        title="Drag to resize panels"
+                      >
+                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-white text-slate-700 rounded-full border border-slate-350 p-1 shadow-md group-hover:scale-110 transition-transform flex items-center justify-center w-6 h-6 select-none font-bold text-[11px] z-20">
+                          ↔️
+                        </div>
+                      </div>
+                    )}
+
                     {/* RIGHT COLUMN: Editable Fields & Item Taxonomy Mappings */}
-                    <div className="lg:col-span-5 space-y-4">
+                    <div 
+                      className="w-full space-y-4 pl-0 lg:pl-1"
+                      style={{ width: isLargeScreen ? `${100 - leftWidth}%` : "100%" }}
+                    >
                       {/* Interactive Bounding Box Tool Controls */}
                       <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 space-y-2">
                         <div className="flex items-center justify-between">

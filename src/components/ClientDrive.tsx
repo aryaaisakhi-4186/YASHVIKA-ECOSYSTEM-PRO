@@ -231,7 +231,7 @@ export default function ClientDrive({
 
       // 2. Fallback to name search or create new folder
       if (!rootId) {
-        const folders = await searchClientFolders(token, client.name);
+        const folders = await searchClientFolders(token, client.name, client.driveFolderId);
         if (folders && folders.length > 0) {
           matched = folders[0];
           setMatchedFolder(matched);
@@ -479,7 +479,7 @@ export default function ClientDrive({
         }
 
         if (!folderId) {
-          const folders = await searchClientFolders(tokenToUse, clientName);
+          const folders = await searchClientFolders(tokenToUse, clientName, targetClient.driveFolderId);
           if (folders && folders.length > 0) {
             folderId = folders[0].id;
           } else {
@@ -528,7 +528,7 @@ export default function ClientDrive({
       // Step 4: Write entry to the correct tab. Shuffled orders or custom tab will dynamically map using appendAdaptiveRowToGoogleSheet!
       if (tokenToUse) {
         // Find or create Client Master Spreadsheet
-        const rootFolders = await searchClientFolders(tokenToUse, clientName);
+        const rootFolders = await searchClientFolders(tokenToUse, clientName, targetClient.driveFolderId);
         if (rootFolders && rootFolders.length > 0) {
           const sObj = await getOrCreateClientSpreadsheet(tokenToUse, rootFolders[0].id, clientName);
           

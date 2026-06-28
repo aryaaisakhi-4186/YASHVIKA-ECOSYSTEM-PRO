@@ -79,7 +79,7 @@ export default function Dashboard({
   const dynamicCompletedToday = [
     ...localCompletedToday,
     ...approvedBills.map((ab) => ({
-      id: `INV-APP-${ab.id.split("-")[1] || ab.id}`,
+      id: `INV-APP-${ab.id.split("-").slice(1).join("-") || ab.id}`,
       clientName: ab.supplierName,
       workType: `Invoice ${ab.invoiceNo} Approved Reconciliation`,
       value: `₹${ab.totalAmountTotal.toLocaleString("en-IN", { maximumFractionDigits: 0 })}`,

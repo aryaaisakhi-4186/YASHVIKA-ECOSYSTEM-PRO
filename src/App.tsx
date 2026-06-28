@@ -1357,6 +1357,7 @@ export default function App() {
               masterItems={masterItems}
               onTabChange={setActiveTab}
               clientMasters={clientMasters}
+              sheetSchemaMappings={sheetSchemaMappings}
             />
           )}
 
