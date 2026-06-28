@@ -396,43 +396,6 @@ export default function LoginScreen({ onLoginSuccess, teamMasters = [] }: LoginS
               </button>
             </div>
           </form>
-
-          {/* Quick Click presets */}
-          <div className="mt-8 pt-6 border-t border-slate-200">
-            <span className="block text-[10px] font-mono tracking-wider font-extrabold text-slate-400 uppercase text-center mb-3">
-              ⚡ LIVE REGISTERED ACCOUNT PASSES:
-            </span>
-            <div className="flex flex-col gap-2 max-h-[160px] overflow-y-auto pr-1">
-              {activeStaff.length === 0 ? (
-                <div className="text-center text-[10px] text-slate-500 py-2">
-                  No active members registered in Master list.
-                </div>
-              ) : (
-                activeStaff.map((p) => (
-                  <button
-                    key={p.id}
-                    type="button"
-                    id={`preset-login-${p.name.replace(/\s+/g, "-")}`}
-                    onClick={() => handlePresetClick(p.mobile)}
-                    className="w-full text-left bg-slate-50 border p-2 rounded-xl text-[11px] font-sans tracking-tight transition-all flex items-center justify-between cursor-pointer border-slate-200 hover:border-slate-300 hover:bg-slate-100/50"
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className={`h-2 w-2 rounded-full ${p.role === "Admin" ? "bg-red-500" : "bg-indigo-500"}`} />
-                      <span className="font-semibold text-slate-800">{p.name}</span>
-                      <span className="text-slate-500 font-mono text-[9px]">({p.mobile})</span>
-                    </div>
-                    <span className={`text-[8px] border px-1.5 py-0.5 rounded uppercase font-bold font-mono tracking-wider text-right ${
-                      p.role === "Admin"
-                        ? "bg-red-50 text-red-600 border-red-200"
-                        : "bg-indigo-50 text-indigo-600 border-indigo-200"
-                    }`}>
-                      {p.role}
-                    </span>
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
         </div>
 
         <div className="mt-5 text-center">

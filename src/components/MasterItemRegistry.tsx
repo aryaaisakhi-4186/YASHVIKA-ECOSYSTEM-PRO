@@ -125,6 +125,9 @@ export default function MasterItemRegistry({
   const [gstRate, setGstRate] = useState("18%");
   const [hsn, setHsn] = useState("");
   const [clientMappedName, setClientMappedName] = useState("");
+  const [mappingName, setMappingName] = useState("");
+  const [saleAccount, setSaleAccount] = useState("");
+  const [purchaseAccount, setPurchaseAccount] = useState("");
 
   const [customGroupModel, setCustomGroupModel] = useState(false);
   const [customUnitModel, setCustomUnitModel] = useState(false);
@@ -139,6 +142,9 @@ export default function MasterItemRegistry({
   const [editGstRate, setEditGstRate] = useState("");
   const [editHsn, setEditHsn] = useState("");
   const [editClientName, setEditClientName] = useState("");
+  const [editMappingName, setEditMappingName] = useState("");
+  const [editSaleAccount, setEditSaleAccount] = useState("");
+  const [editPurchaseAccount, setEditPurchaseAccount] = useState("");
 
   // Confirmation warning states
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -481,6 +487,9 @@ export default function MasterItemRegistry({
       gstRate: gstRate.trim(),
       hsn: hsn.trim(),
       clientName: clientMappedName.trim() || "General",
+      mappingName: mappingName.trim() || undefined,
+      saleAccount: saleAccount.trim() || undefined,
+      purchaseAccount: purchaseAccount.trim() || undefined,
     });
 
     setItemName("");
@@ -490,6 +499,9 @@ export default function MasterItemRegistry({
     setGstRate("18%");
     setHsn("");
     setClientMappedName("");
+    setMappingName("");
+    setSaleAccount("");
+    setPurchaseAccount("");
     alert("New product item successfully registered in Master Registry!");
   };
 
@@ -502,6 +514,9 @@ export default function MasterItemRegistry({
     setEditGstRate(item.gstRate);
     setEditHsn(item.hsn);
     setEditClientName(item.clientName || "General");
+    setEditMappingName(item.mappingName || "");
+    setEditSaleAccount(item.saleAccount || "");
+    setEditPurchaseAccount(item.purchaseAccount || "");
   };
 
   const handleSaveEdit = () => {
@@ -530,6 +545,9 @@ export default function MasterItemRegistry({
         gstRate: editGstRate.trim(),
         hsn: editHsn.trim(),
         clientName: editClientName.trim() || "General",
+        mappingName: editMappingName.trim() || undefined,
+        saleAccount: editSaleAccount.trim() || undefined,
+        purchaseAccount: editPurchaseAccount.trim() || undefined,
       });
       setEditingId(null);
     }
@@ -1129,6 +1147,51 @@ export default function MasterItemRegistry({
                   </div>
                 </div>
 
+                {/* Row 2.5: Mapping Name, Sale Account, Purchase Account (3 columns) */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div>
+                    <label className="text-[10px] font-mono tracking-wider text-slate-500 font-bold uppercase block mb-1">
+                      Mapping Name (Regular Item Synonym)
+                    </label>
+                    <input
+                      id="form-mapping-name"
+                      type="text"
+                      placeholder="e.g. A4 Copy Paper, A4 Xerox Paper"
+                      value={mappingName}
+                      onChange={(e) => setMappingName(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 text-xs px-3 py-2 rounded-lg text-slate-800 focus:outline-none focus:border-indigo-500 h-9 font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-mono tracking-wider text-slate-500 font-bold uppercase block mb-1">
+                      Specify Sale Account
+                    </label>
+                    <input
+                      id="form-sale-account"
+                      type="text"
+                      placeholder="e.g. Sales A/c, Domestic Sales"
+                      value={saleAccount}
+                      onChange={(e) => setSaleAccount(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 text-xs px-3 py-2 rounded-lg text-slate-800 focus:outline-none focus:border-indigo-500 h-9 font-medium"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="text-[10px] font-mono tracking-wider text-slate-500 font-bold uppercase block mb-1">
+                      Specify Purchase Account
+                    </label>
+                    <input
+                      id="form-purchase-account"
+                      type="text"
+                      placeholder="e.g. Purchase A/c, IGST Purchase"
+                      value={purchaseAccount}
+                      onChange={(e) => setPurchaseAccount(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 text-xs px-3 py-2 rounded-lg text-slate-800 focus:outline-none focus:border-indigo-500 h-9 font-medium"
+                    />
+                  </div>
+                </div>
+
                 {/* Row 3: Remaining (Client Association Mapping) */}
                 <div>
                   <label className="text-[10px] font-mono tracking-wider text-slate-500 font-bold uppercase block mb-1">
@@ -1248,6 +1311,9 @@ export default function MasterItemRegistry({
                     <th className="p-3 text-center">Unit</th>
                     <th className="p-3 text-center">GST Rate</th>
                     <th className="p-3 text-center">HSN</th>
+                    <th className="p-3">Mapping Name</th>
+                    <th className="p-3">Sale Account</th>
+                    <th className="p-3">Purchase Account</th>
                     <th className="p-3">Associated Firm</th>
                     <th className="p-3 text-right">Actions</th>
                   </tr>
@@ -1255,7 +1321,7 @@ export default function MasterItemRegistry({
                 <tbody className="divide-y divide-slate-100">
                   {paginatedItems.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="p-8 text-center text-slate-400 font-mono">
+                      <td colSpan={11} className="p-8 text-center text-slate-400 font-mono">
                         No trade item entries matched standard search parameters.
                       </td>
                     </tr>
@@ -1322,6 +1388,33 @@ export default function MasterItemRegistry({
                               <td className="p-2">
                                 <input
                                   type="text"
+                                  className="w-full bg-white border border-slate-300 rounded px-1.5 py-1 text-xs text-slate-700"
+                                  value={editMappingName}
+                                  placeholder="Mapping Name"
+                                  onChange={(e) => setEditMappingName(e.target.value)}
+                                />
+                              </td>
+                              <td className="p-2">
+                                <input
+                                  type="text"
+                                  className="w-full bg-white border border-slate-300 rounded px-1.5 py-1 text-xs text-slate-700"
+                                  value={editSaleAccount}
+                                  placeholder="Sale Account"
+                                  onChange={(e) => setEditSaleAccount(e.target.value)}
+                                />
+                              </td>
+                              <td className="p-2">
+                                <input
+                                  type="text"
+                                  className="w-full bg-white border border-slate-300 rounded px-1.5 py-1 text-xs text-slate-700"
+                                  value={editPurchaseAccount}
+                                  placeholder="Purchase Account"
+                                  onChange={(e) => setEditPurchaseAccount(e.target.value)}
+                                />
+                              </td>
+                              <td className="p-2">
+                                <input
+                                  type="text"
                                   className="w-full bg-white border border-slate-300 rounded px-1.5 py-1 text-xs text-indigo-700 h-7"
                                   value={editClientName}
                                   onChange={(e) => setEditClientName(e.target.value)}
@@ -1362,6 +1455,15 @@ export default function MasterItemRegistry({
                                 </span>
                               </td>
                               <td className="p-3 text-center font-mono font-bold text-slate-600">{item.hsn}</td>
+                              <td className="p-3 text-slate-600 font-medium font-mono text-[11px]">
+                                {item.mappingName || <span className="text-slate-300 italic">None</span>}
+                              </td>
+                              <td className="p-3 text-emerald-700 font-medium font-mono text-[11px]">
+                                {item.saleAccount || <span className="text-slate-300 italic">-</span>}
+                              </td>
+                              <td className="p-3 text-orange-700 font-medium font-mono text-[11px]">
+                                {item.purchaseAccount || <span className="text-slate-300 italic">-</span>}
+                              </td>
                               <td className="p-3 text-indigo-700 font-mono text-[11px] font-medium">
                                 {item.clientName || "General"}
                               </td>

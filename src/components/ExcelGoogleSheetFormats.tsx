@@ -18,7 +18,8 @@ import {
   Eye,
   EyeOff,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Search
 } from "lucide-react";
 import { ClientMaster, BankFormatMapping, SheetSchemaMapping } from "../types";
 
@@ -85,6 +86,52 @@ export default function ExcelGoogleSheetFormats({
   const [schemaClient, setSchemaClient] = useState("all");
   const [schemaName, setSchemaName] = useState("");
   const [schemaDescription, setSchemaDescription] = useState("");
+
+  // State for tabbed organization of saved schemas by Category and nested Clients
+  const [registryCategory, setRegistryCategory] = useState<"PURCHASE" | "SALES" | "EXPENSES" | "GENERAL">("PURCHASE");
+  const [registryClientId, setRegistryClientId] = useState<string>("all");
+  const [tabClientSearchQuery, setTabClientSearchQuery] = useState("");
+
+  const [bankRegistryCategory, setBankRegistryCategory] = useState<"SBI" | "HDFC" | "ICICI" | "GENERAL">("SBI");
+  const [bankRegistryClientId, setBankRegistryClientId] = useState<string>("all");
+  const [bankTabClientSearchQuery, setBankTabClientSearchQuery] = useState("");
+  const [bankClientId, setBankClientId] = useState("all");
+  const [bankClientName, setBankClientName] = useState("All Clients / General");
+
+  const getBankCategory = (nameStr: string): "SBI" | "HDFC" | "ICICI" | "GENERAL" => {
+    const l = (nameStr || "").toLowerCase();
+    if (l.includes("sbi") || l.includes("state bank")) return "SBI";
+    if (l.includes("hdfc")) return "HDFC";
+    if (l.includes("icici")) return "ICICI";
+    return "GENERAL";
+  };
+
+  const getSchemaCategory = (nameStr: string): "PURCHASE" | "SALES" | "EXPENSES" | "GENERAL" => {
+    const l = (nameStr || "").toLowerCase();
+    if (l.includes("purchase")) return "PURCHASE";
+    if (l.includes("sales") || l.includes("sale")) return "SALES";
+    if (l.includes("expense") || l.includes("exp")) return "EXPENSES";
+    return "GENERAL";
+  };
+
+  // Search state for searchable Client Assignment dropdown
+  const [clientSearchQuery, setClientSearchQuery] = useState("");
+  const [isClientDropdownOpen, setIsClientDropdownOpen] = useState(false);
+  const clientDropdownRef = React.useRef<HTMLDivElement>(null);
+
+  React.useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (clientDropdownRef.current && !clientDropdownRef.current.contains(event.target as Node)) {
+        setIsClientDropdownOpen(false);
+      }
+    }
+    if (isClientDropdownOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isClientDropdownOpen]);
   
   // Dynamic columns list state for Sheets Schemas (Picture 2 replacement: column-by-column editor)
   const [schemaColumns, setSchemaColumns] = useState<DynamicColumnItem[]>([
@@ -184,6 +231,8 @@ export default function ExcelGoogleSheetFormats({
     setSchemaClient("all");
     setSchemaName("");
     setSchemaDescription("");
+    setClientSearchQuery("");
+    setIsClientDropdownOpen(false);
     setSchemaColumns([
       { id: "s1", name: "SERIES", isHidden: false },
       { id: "s2", name: "DATE", isHidden: false },
@@ -202,6 +251,8 @@ export default function ExcelGoogleSheetFormats({
     setSchemaClient(item.clientId);
     setSchemaName(item.schemaName);
     setSchemaDescription(item.description || "");
+    setClientSearchQuery("");
+    setIsClientDropdownOpen(false);
 
     // Populate columns, fallback split if columns property not exists
     if (item.columns && item.columns.length > 0) {
@@ -305,6 +356,8 @@ export default function ExcelGoogleSheetFormats({
       debitColumn: debitColVal,
       creditColumn: creditColVal,
       balanceColumn: balanceColVal,
+      clientId: bankClientId,
+      clientName: bankClientName,
       // Rich dynamic columns sequence stored inside custom properties in compliance mappings array
       columns: bankColumns.map(c => ({
         id: c.id,
@@ -345,6 +398,8 @@ export default function ExcelGoogleSheetFormats({
     setShowBankForm(false);
     setEditBankId(null);
     setBankNameStr("");
+    setBankClientId("all");
+    setBankClientName("All Clients / General");
     setBankColumns([
       { id: "b1", systemField: "Transaction Date", excelHeader: "DATE", isHidden: false },
       { id: "b2", systemField: "Particulars / Narration", excelHeader: "PARTICULARS", isHidden: false },
@@ -358,6 +413,8 @@ export default function ExcelGoogleSheetFormats({
   const handleEditBankClick = (item: any) => {
     setEditBankId(item.id);
     setBankNameStr(item.bankName);
+    setBankClientId(item.clientId || "all");
+    setBankClientName(item.clientName || "All Clients / General");
 
     if (item.columns && item.columns.length > 0) {
       setBankColumns(item.columns.map((c: any) => ({
@@ -492,24 +549,188 @@ export default function ExcelGoogleSheetFormats({
                 </button>
               </div>
 
+              {/* Quick Copy Feature to instantly duplicate/clone any existing schema */}
+              {sheetSchemaMappings.length > 0 && (
+                <div className="mb-5 p-3.5 bg-amber-50/50 border border-amber-200/60 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-3xs">
+                  <div className="text-left">
+                    <span className="text-[11px] text-amber-850 font-black uppercase tracking-wider flex items-center gap-1">
+                      📋 Copy Structure From Saved Schema
+                    </span>
+                    <p className="text-[10px] text-slate-500 font-semibold mt-0.5">
+                      Choose an existing schema to pre-fill all 18+ column fields, schema name, and notes instantly.
+                    </p>
+                  </div>
+                  <div className="relative shrink-0 sm:w-80">
+                    <select
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (!val) return;
+                        const srcSchema = sheetSchemaMappings.find((s) => s.id === val);
+                        if (srcSchema) {
+                          setSchemaName(srcSchema.schemaName);
+                          setSchemaDescription(srcSchema.description || "");
+                          
+                          // Deep copy columns with fresh ids to prevent react key collision
+                          let colsToCopy: DynamicColumnItem[] = [];
+                          if (srcSchema.columns && srcSchema.columns.length > 0) {
+                            colsToCopy = srcSchema.columns.map((c) => ({
+                              id: `sc-col-${Date.now()}-${Math.floor(Math.random() * 100000)}`,
+                              name: c.name,
+                              isHidden: !!c.isHidden,
+                            }));
+                          } else {
+                            colsToCopy = (srcSchema.columnsList || "")
+                              .split(",")
+                              .map((col, idx) => ({
+                                id: `sc-col-${Date.now()}-${idx}`,
+                                name: col.trim(),
+                                isHidden: false,
+                              }))
+                              .filter((c) => c.name);
+                          }
+                          setSchemaColumns(colsToCopy);
+                          triggerFeedback(`Copied layout from "${srcSchema.schemaName}"! You can now assign it to another client.`, "success");
+                        }
+                        // Reset select value so they can re-select if needed
+                        e.target.value = "";
+                      }}
+                      className="w-full bg-white border border-amber-250 py-1.5 px-3 rounded-lg text-slate-800 text-xs font-extrabold focus:outline-none focus:border-amber-500 cursor-pointer shadow-3xs"
+                    >
+                      <option value="">-- Choose Schema to Copy Structure --</option>
+                      {sheetSchemaMappings.map((s) => {
+                        const clientName = s.clientId === "all" ? "All Clients" : (clientMasters.find((c) => c.id === s.clientId)?.name || s.clientName);
+                        return (
+                          <option key={s.id} value={s.id}>
+                            {s.schemaName} ({clientName})
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                </div>
+              )}
+
               <form onSubmit={handleCreateOrUpdateSchema} className="space-y-5 text-xs font-medium text-slate-700">
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div>
+                  <div className="relative" ref={clientDropdownRef}>
                     <label className="block text-[10px] text-slate-500 uppercase font-mono font-bold mb-1">
                       CLIENT ASSIGNMENT
                     </label>
-                    <select
-                      value={schemaClient}
-                      onChange={(e) => setSchemaClient(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-250 py-2 px-2.5 rounded-lg text-slate-800 font-bold focus:outline-none focus:border-indigo-500 focus:bg-white"
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsClientDropdownOpen(!isClientDropdownOpen);
+                        setClientSearchQuery(""); // Clear search query on toggle
+                      }}
+                      className="w-full bg-slate-50 border border-slate-250 py-2 px-2.5 rounded-lg text-slate-800 font-bold focus:outline-none focus:border-indigo-500 focus:bg-white flex items-center justify-between shadow-3xs cursor-pointer text-left min-h-[38px]"
                     >
-                      <option value="all">All Clients / General Standard Format</option>
-                      {clientMasters.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name} {c.gstin ? `(${c.gstin})` : ""}
-                        </option>
-                      ))}
-                    </select>
+                      <span className="truncate">
+                        {schemaClient === "all" ? (
+                          <span className="text-slate-500 font-semibold">All Clients / General Standard Format</span>
+                        ) : (
+                          clientMasters.find((c) => c.id === schemaClient)?.name || "Select Client"
+                        )}
+                        {schemaClient !== "all" && (() => {
+                          const matched = clientMasters.find((c) => c.id === schemaClient);
+                          return matched?.gstin ? ` (${matched.gstin})` : "";
+                        })()}
+                      </span>
+                      <ChevronDown className="h-4 w-4 text-slate-400 shrink-0 ml-1" />
+                    </button>
+
+                    {isClientDropdownOpen && (
+                      <div className="absolute left-0 mt-1 w-full bg-white border border-slate-250 rounded-xl shadow-lg z-50 overflow-hidden animate-fadeIn max-h-72 flex flex-col">
+                        <div className="p-2 border-b border-slate-100 bg-slate-50 flex items-center gap-2">
+                          <Search className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                          <input
+                            type="text"
+                            placeholder="Search client name or GSTIN..."
+                            value={clientSearchQuery}
+                            onChange={(e) => setClientSearchQuery(e.target.value)}
+                            className="w-full bg-transparent text-xs text-slate-800 outline-none border-none py-1 focus:ring-0 font-medium"
+                            autoFocus
+                          />
+                          {clientSearchQuery && (
+                            <button
+                              type="button"
+                              onClick={() => setClientSearchQuery("")}
+                              className="text-slate-400 hover:text-slate-600 text-xs px-1 font-bold"
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                        <div className="overflow-y-auto max-h-56 divide-y divide-slate-50">
+                          {/* Option for All Clients */}
+                          {("all clients".includes(clientSearchQuery.toLowerCase()) || "general".includes(clientSearchQuery.toLowerCase()) || !clientSearchQuery) && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSchemaClient("all");
+                                setIsClientDropdownOpen(false);
+                                setClientSearchQuery("");
+                              }}
+                              className={`w-full text-left px-3 py-2 text-xs transition-colors flex items-center justify-between cursor-pointer ${
+                                schemaClient === "all"
+                                  ? "bg-indigo-50/70 text-indigo-900 font-black"
+                                  : "text-slate-650 hover:bg-slate-50 font-semibold"
+                              }`}
+                            >
+                              <span>All Clients / General Standard Format</span>
+                              {schemaClient === "all" && <Check className="h-3.5 w-3.5 text-indigo-600" />}
+                            </button>
+                          )}
+
+                          {/* Filtered Clients list */}
+                          {clientMasters
+                            .filter(
+                              (c) =>
+                                c.name.toLowerCase().includes(clientSearchQuery.toLowerCase()) ||
+                                (c.gstin && c.gstin.toLowerCase().includes(clientSearchQuery.toLowerCase()))
+                            )
+                            .map((c) => {
+                              const isSelected = schemaClient === c.id;
+                              return (
+                                <button
+                                  key={c.id}
+                                  type="button"
+                                  onClick={() => {
+                                    setSchemaClient(c.id);
+                                    setIsClientDropdownOpen(false);
+                                    setClientSearchQuery("");
+                                  }}
+                                  className={`w-full text-left px-3 py-2 text-xs transition-colors flex flex-col cursor-pointer ${
+                                    isSelected
+                                      ? "bg-indigo-50/70 text-indigo-900 font-black"
+                                      : "text-slate-750 hover:bg-slate-50 font-semibold"
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between w-full">
+                                    <span className="truncate font-bold">{c.name}</span>
+                                    {isSelected && <Check className="h-3.5 w-3.5 text-indigo-600 shrink-0 ml-1" />}
+                                  </div>
+                                  {c.gstin && (
+                                    <span className="text-[10px] text-slate-450 font-mono font-medium mt-0.5">
+                                      {c.gstin}
+                                    </span>
+                                  )}
+                                </button>
+                              );
+                            })}
+
+                          {clientMasters.filter(
+                            (c) =>
+                              c.name.toLowerCase().includes(clientSearchQuery.toLowerCase()) ||
+                              (c.gstin && c.gstin.toLowerCase().includes(clientSearchQuery.toLowerCase()))
+                          ).length === 0 &&
+                            !("all clients".includes(clientSearchQuery.toLowerCase()) || "general".includes(clientSearchQuery.toLowerCase()) || !clientSearchQuery) && (
+                              <div className="p-3 text-center text-slate-400 text-[10px] font-mono">
+                                No matching clients found
+                              </div>
+                            )}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="md:col-span-2">
@@ -633,28 +854,174 @@ export default function ExcelGoogleSheetFormats({
           )}
 
           {/* Action bar and dynamic list */}
-          <div className="flex justify-between items-center bg-slate-50/50 border border-slate-200/60 p-3.5 rounded-xl">
-            <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wide flex items-center gap-2">
-              <Layers className="h-4 w-4 text-amber-600" />
-              Dynamic Schema Template Registry ({sheetSchemaMappings.length})
-            </span>
-            {!showSchemaForm && (
-              <button
-                type="button"
-                onClick={() => {
-                  resetSchemaForm();
-                  setShowSchemaForm(true);
-                }}
-                className="bg-indigo-600 hover:bg-indigo-750 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer uppercase transition-all shadow-3xs"
-              >
-                <Plus className="h-4 w-4" /> Create New Schema
-              </button>
-            )}
-          </div>
+          {(() => {
+            const purchaseSchemas = sheetSchemaMappings.filter((s) => getSchemaCategory(s.schemaName) === "PURCHASE");
+            const salesSchemas = sheetSchemaMappings.filter((s) => getSchemaCategory(s.schemaName) === "SALES");
+            const expensesSchemas = sheetSchemaMappings.filter((s) => getSchemaCategory(s.schemaName) === "EXPENSES");
+            const generalSchemas = sheetSchemaMappings.filter((s) => getSchemaCategory(s.schemaName) === "GENERAL");
 
-          {/* Picture 3 FIX: Compact bento style cards in a grid of 3 per row for high density on large screens */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4.5 items-start">
-            {sheetSchemaMappings.map((schema) => {
+            const purchaseCount = purchaseSchemas.length;
+            const salesCount = salesSchemas.length;
+            const expensesCount = expensesSchemas.length;
+            const generalCount = generalSchemas.length;
+
+            const filteredByCategory = sheetSchemaMappings.filter((s) => getSchemaCategory(s.schemaName) === registryCategory);
+
+            // Extract unique clients present in filtered-by-category schemas
+            const activeClientIdsInCat = Array.from(new Set(filteredByCategory.map((s) => s.clientId).filter(id => id !== "all")));
+            const uniqueClientsInCat = clientMasters.filter((c) => activeClientIdsInCat.includes(c.id));
+
+            // Schemas to display
+            const displayedSchemas = filteredByCategory.filter((schema) => {
+              if (registryClientId === "all") return true;
+              return schema.clientId === registryClientId;
+            });
+
+            return (
+              <div className="space-y-4">
+                <div className="flex flex-col gap-4 bg-slate-50/50 border border-slate-200/60 p-4 rounded-xl">
+                  <div className="flex justify-between items-center flex-wrap gap-2">
+                    <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wide flex items-center gap-2">
+                      <Layers className="h-4 w-4 text-amber-600" />
+                      Dynamic Schema Template Registry ({sheetSchemaMappings.length})
+                    </span>
+                    {!showSchemaForm && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          resetSchemaForm();
+                          setShowSchemaForm(true);
+                        }}
+                        className="bg-indigo-600 hover:bg-indigo-750 text-white font-bold text-xs px-3.5 py-1.5 rounded-lg flex items-center gap-1.5 cursor-pointer uppercase transition-all shadow-3xs"
+                      >
+                        <Plus className="h-4 w-4" /> Create New Schema
+                      </button>
+                    )}
+                  </div>
+
+                  {/* FIRST LEVEL CATEGORY TABS */}
+                  <div className="flex flex-wrap gap-2 border-b border-slate-200/60 pb-1.5">
+                    {[
+                      { id: "PURCHASE", label: "Purchase Schemas", icon: FileSpreadsheet, count: purchaseCount },
+                      { id: "SALES", label: "Sales Schemas", icon: Layers, count: salesCount },
+                      { id: "EXPENSES", label: "Expense Schemas", icon: FileText, count: expensesCount },
+                      { id: "GENERAL", label: "General & Other", icon: Settings2, count: generalCount }
+                    ].map((tab) => {
+                      const isActive = registryCategory === tab.id;
+                      const IconComponent = tab.icon;
+                      return (
+                        <button
+                          key={tab.id}
+                          type="button"
+                          onClick={() => {
+                            setRegistryCategory(tab.id as any);
+                            setRegistryClientId("all"); // Reset client filter on category switch
+                            setTabClientSearchQuery(""); // Reset search query on category switch
+                          }}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer border ${
+                            isActive
+                              ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs"
+                              : "bg-white hover:bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300"
+                          }`}
+                        >
+                          <IconComponent className={`h-3.5 w-3.5 ${isActive ? "text-white" : "text-slate-400"}`} />
+                          <span>{tab.label}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono font-bold ${
+                            isActive 
+                              ? "bg-white/20 text-white" 
+                              : "bg-slate-100 text-slate-500 border border-slate-200"
+                          }`}>
+                            {tab.count}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* SECOND LEVEL NESTED CLIENT FILTERS WITH TAB SEARCH */}
+                  {filteredByCategory.length > 0 && (
+                    <div className="flex flex-col gap-3 bg-white p-3 rounded-xl border border-slate-200/50 shadow-3xs">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <span className="text-[10px] text-slate-500 uppercase font-mono font-bold tracking-wider flex items-center gap-1.5">
+                          📂 Choose Client Tab:
+                        </span>
+                        
+                        {/* Tab Search Input Box */}
+                        {uniqueClientsInCat.length > 1 && (
+                          <div className="relative max-w-xs w-full sm:w-64 flex items-center gap-1.5 bg-slate-50 border border-slate-250 rounded-lg px-2 py-1">
+                            <Search className="h-3 w-3 text-slate-400 shrink-0" />
+                            <input
+                              type="text"
+                              placeholder="Search client tabs..."
+                              value={tabClientSearchQuery}
+                              onChange={(e) => setTabClientSearchQuery(e.target.value)}
+                              className="w-full bg-transparent text-[10px] text-slate-750 outline-none border-none py-0 focus:ring-0 font-bold"
+                            />
+                            {tabClientSearchQuery && (
+                              <button
+                                type="button"
+                                onClick={() => setTabClientSearchQuery("")}
+                                className="text-slate-400 hover:text-slate-650 text-[10px] font-black px-1"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap gap-1.5 items-center">
+                        <button
+                          type="button"
+                          onClick={() => setRegistryClientId("all")}
+                          className={`px-3 py-1 rounded-full text-[10px] font-black cursor-pointer transition-all border ${
+                            registryClientId === "all"
+                              ? "bg-slate-800 text-white border-slate-800 shadow-3xs"
+                              : "bg-slate-100 hover:bg-slate-200/60 text-slate-650 border-slate-200"
+                          }`}
+                        >
+                          All Clients ({filteredByCategory.length})
+                        </button>
+                        {uniqueClientsInCat
+                          .filter((c) =>
+                            c.name.toLowerCase().includes(tabClientSearchQuery.toLowerCase()) ||
+                            (c.gstin && c.gstin.toLowerCase().includes(tabClientSearchQuery.toLowerCase()))
+                          )
+                          .map((c) => {
+                            const clientCount = filteredByCategory.filter(s => s.clientId === c.id).length;
+                            const isSelected = registryClientId === c.id;
+                            return (
+                              <button
+                                key={c.id}
+                                type="button"
+                                onClick={() => setRegistryClientId(c.id)}
+                                className={`px-3 py-1 rounded-full text-[10px] font-black cursor-pointer transition-all border ${
+                                  isSelected
+                                    ? "bg-indigo-600 text-white border-indigo-600 shadow-3xs"
+                                    : "bg-slate-50 hover:bg-slate-150 text-slate-650 border-slate-200"
+                                }`}
+                              >
+                                {c.name} ({clientCount})
+                              </button>
+                            );
+                          })}
+
+                        {uniqueClientsInCat.filter((c) =>
+                          c.name.toLowerCase().includes(tabClientSearchQuery.toLowerCase()) ||
+                          (c.gstin && c.gstin.toLowerCase().includes(tabClientSearchQuery.toLowerCase()))
+                        ).length === 0 && (
+                          <span className="text-[10px] text-slate-400 font-mono italic p-1">
+                            No clients match search query
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Dynamic list in list format as requested */}
+                <div className="flex flex-col gap-3.5">
+                  {displayedSchemas.map((schema) => {
               // Read dynamic column list fallback
               let cols: any[] = [];
               if (schema.columns && schema.columns.length > 0) {
@@ -675,42 +1042,52 @@ export default function ExcelGoogleSheetFormats({
                 <div 
                   key={schema.id} 
                   className={`bg-white border rounded-xl overflow-hidden transition-all text-left shadow-4xs ${
-                    isExpanded ? "border-amber-400 ring-1 ring-amber-100 col-span-1 sm:col-span-2 lg:col-span-3 pb-2" : "border-slate-200 hover:border-slate-300"
+                    isExpanded ? "border-amber-400 ring-1 ring-amber-100 pb-2" : "border-slate-200 hover:border-slate-350"
                   }`}
                 >
-                  {/* Collapsed Header: Toggling expand on click with compact styles */}
+                  {/* Collapsed Header: Toggling expand on click with list-aligned layout */}
                   <div 
                     onClick={() => toggleSchemaExpand(schema.id)}
-                    className="p-3.5 flex flex-col justify-between cursor-pointer hover:bg-slate-50/50 select-none space-y-3"
+                    className="p-3.5 flex flex-col md:flex-row md:items-center justify-between cursor-pointer hover:bg-slate-50/50 select-none gap-3"
                   >
-                    <div className="flex items-start gap-2.5">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
                       {/* Checkbox option to "tick" / click as requested */}
                       <input
                         type="checkbox"
                         checked={isExpanded}
-                        onChange={() => {}} // Controlled by header click
-                        className="h-4 w-4 mt-0.5 rounded text-amber-600 border-slate-300 focus:ring-amber-500 cursor-pointer pointer-events-none shrink-0"
+                        readOnly
+                        className="h-4 w-4 rounded text-amber-600 border-slate-300 focus:ring-amber-500 cursor-pointer pointer-events-none shrink-0"
                       />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <span className="bg-amber-100 text-amber-900 text-[8px] font-mono tracking-wider font-extrabold px-1.5 py-0.5 rounded border border-amber-200">
-                            {schema.schemaName.toLowerCase().includes("purchase") ? "PURCHASE" : schema.schemaName.toLowerCase().includes("sales") ? "SALES" : schema.schemaName.toLowerCase().includes("expense") ? "EXPENSES" : "GENERAL SHEETS"}
-                          </span>
-                          <span className="text-[9px] text-slate-400 font-mono font-bold truncate">
-                            {schema.clientName}
-                          </span>
+                      
+                      <div className="flex flex-col md:flex-row md:items-center gap-2.5 min-w-0 flex-1">
+                        {/* HIGHLY HIGHLIGHTED CLIENT NAME BADGE */}
+                        <span className="inline-flex items-center gap-1.5 bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-black px-3 py-1 rounded-lg shrink-0 shadow-2xs">
+                          <span className="text-xs">🏢</span>
+                          <span className="tracking-tight uppercase">{schema.clientName || "All Clients / General Standard Format"}</span>
+                        </span>
+
+                        <div className="min-w-0 flex-1">
+                          <h4 className="font-extrabold text-xs text-slate-900 tracking-tight uppercase truncate">
+                            {schema.schemaName}
+                          </h4>
+                          {schema.description && (
+                            <p className="text-[10px] text-slate-500 truncate font-semibold mt-0.5">
+                              {schema.description}
+                            </p>
+                          )}
                         </div>
-                        <h4 className="font-extrabold text-xs text-slate-900 tracking-tight uppercase mt-1">
-                          {schema.schemaName}
-                        </h4>
                       </div>
                     </div>
 
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                      <span className="text-[9px] text-slate-500 font-mono bg-slate-50 border border-slate-200 px-2 py-0.5 rounded font-black">
+                    <div className="flex items-center justify-between md:justify-end gap-4 shrink-0 border-t md:border-t-0 pt-2 md:pt-0 border-slate-100">
+                      <span className="bg-amber-50 text-amber-950 text-[9px] font-mono tracking-wider font-extrabold px-2 py-1 rounded-md border border-amber-200 shrink-0">
+                        📁 {getSchemaCategory(schema.schemaName)}
+                      </span>
+                      
+                      <span className="text-[10px] text-slate-650 font-mono bg-slate-50 border border-slate-200 px-2 py-1 rounded font-black shrink-0">
                         {visibleCols.length} Columns {hiddenCols.length > 0 && `(${hiddenCols.length} H)`}
                       </span>
-                      <div className="text-slate-400 flex items-center">
+                      <div className="text-slate-400 flex items-center shrink-0">
                         {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
                       </div>
                     </div>
@@ -817,15 +1194,22 @@ export default function ExcelGoogleSheetFormats({
                     </div>
                   )}
                 </div>
-              );
-            })}
-
-            {sheetSchemaMappings.length === 0 && (
-              <div className="bg-slate-50 p-12 text-center rounded-2xl border border-dashed border-slate-250 text-slate-400 font-mono col-span-1 sm:col-span-2 lg:col-span-3">
-                No custom schema formats registered. Click "Create New Schema" to declare custom sheet layouts.
+                  );
+                })}
               </div>
-            )}
-          </div>
+
+              {displayedSchemas.length === 0 && (
+                <div className="bg-white border border-slate-200 p-12 text-center rounded-2xl shadow-3xs max-w-md mx-auto col-span-1 sm:col-span-2 lg:col-span-3">
+                  <Layers className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                  <h5 className="font-extrabold text-slate-700 text-xs uppercase font-mono">No Schemas In This Tab</h5>
+                  <p className="text-[10px] text-slate-450 font-bold mt-1">
+                    No custom layouts have been registered for {registryCategory.toLowerCase()} for the selected client yet.
+                  </p>
+                </div>
+              )}
+            </div>
+            );
+          })()}
         </div>
       ) : (
         <div className="space-y-6 animate-fadeIn text-left">
@@ -871,18 +1255,39 @@ export default function ExcelGoogleSheetFormats({
                   </button>
                 </div>
 
-                <div>
-                  <label className="block text-[10px] text-slate-500 uppercase font-mono font-bold mb-1">
-                    Bank Registry Master Identifier Name
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. State Bank of India Current A/C, ICICI Corporate Statement, Bank of Baroda"
-                    value={bankNameStr}
-                    onChange={(e) => setBankNameStr(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-250 rounded px-2.5 py-2 text-xs text-slate-800 font-extrabold focus:outline-none focus:border-indigo-500 focus:bg-white"
-                  />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] text-slate-500 uppercase font-mono font-bold mb-1">
+                      Bank Registry Master Identifier Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="e.g. State Bank of India Current A/C, ICICI Corporate Statement, Bank of Baroda"
+                      value={bankNameStr}
+                      onChange={(e) => setBankNameStr(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-250 rounded px-2.5 py-2 text-xs text-slate-800 font-extrabold focus:outline-none focus:border-indigo-500 focus:bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-slate-500 uppercase font-mono font-bold mb-1">
+                      Assign to specific Client (Optional)
+                    </label>
+                    <select
+                      value={bankClientId}
+                      onChange={(e) => {
+                        setBankClientId(e.target.value);
+                        const cl = clientMasters.find(c => c.id === e.target.value);
+                        setBankClientName(cl ? cl.name : "All Clients / General");
+                      }}
+                      className="w-full bg-slate-50 border border-slate-250 rounded px-2.5 py-2 text-xs text-slate-800 font-extrabold focus:outline-none focus:border-indigo-500 focus:bg-white"
+                    >
+                      <option value="all">All Clients (General Standard Format)</option>
+                      {clientMasters.map((c) => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
 
                 <div className="border-t border-slate-100 pt-3 space-y-3">
@@ -900,71 +1305,69 @@ export default function ExcelGoogleSheetFormats({
                   </div>
 
                   {/* Render Columns-by-column editor for Bank registry: perfectly solves "bank mapping tab me columns badane or ghatne ka option... or column hide ka" */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-3.5 rounded-lg border border-dashed border-slate-200">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-[350px] overflow-y-auto p-1.5 custom-scrollbar bg-slate-50/50 rounded-lg border border-slate-200/60">
                     {bankColumns.map((col, bIdx) => (
                       <div 
                         key={col.id} 
-                        className={`bg-white p-3 rounded-lg border flex flex-col justify-between space-y-2 relative transition-all ${
-                          col.isHidden ? "opacity-55 border-red-150 bg-red-50/20" : "border-slate-205 scroll-m-2 hover:border-indigo-300"
+                        className={`flex items-center gap-2 bg-white border p-2 rounded-lg shadow-4xs transition-all ${
+                          col.isHidden ? "opacity-55 border-red-150 bg-red-50/20" : "border-slate-200 hover:border-indigo-300"
                         }`}
                       >
-                        <div className="flex justify-between items-center">
+                        <span className="text-[10px] font-mono text-slate-400 font-bold w-4 text-center shrink-0">
+                          {bIdx + 1}
+                        </span>
+
+                        <div className="flex-1 flex flex-col min-w-0">
                           {col.isCustom ? (
                             <input
                               type="text"
                               value={col.systemField}
                               onChange={(e) => handleUpdateBankSystemField(col.id, e.target.value)}
-                              placeholder="System Parameter Name"
-                              className="text-[10px] font-mono font-bold uppercase text-indigo-700 bg-slate-50 border border-slate-200 px-1 py-0.5 rounded w-36 outline-none"
+                              placeholder="System Field"
+                              className="bg-slate-50 border border-slate-200/60 rounded px-1.5 py-0.5 text-[9px] font-mono font-bold uppercase text-indigo-700 outline-none focus:border-indigo-500 focus:bg-white mb-0.5"
                             />
                           ) : (
-                            <span className="text-[10px] font-mono font-black uppercase text-indigo-850">
+                            <span className="text-[9px] font-mono font-black uppercase text-indigo-850 truncate mb-0.5" title={col.systemField}>
                               {col.systemField}
                             </span>
                           )}
 
-                          <div className="flex gap-1">
-                            {/* Hide/Show Toggle */}
-                            <button
-                              type="button"
-                              onClick={() => handleToggleBankColumnVisibility(col.id)}
-                              className={`p-1 rounded cursor-pointer border text-[10px] flex items-center gap-0.5 ${
-                                col.isHidden 
-                                  ? "bg-red-100 text-red-600 border-red-200" 
-                                  : "bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100"
-                              }`}
-                              title={col.isHidden ? "Hidden - This column will be ignored in parse" : "Active - Click to ignore column"}
-                            >
-                              {col.isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                              <span className="text-[8px] font-mono">{col.isHidden ? "HIDDEN" : "ACTIVE"}</span>
-                            </button>
-
-                            {/* Delete dynamically requested Column */}
-                            {(col.isCustom || bIdx >= 6) && (
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveBankColumnRow(col.id)}
-                                className="text-red-400 hover:text-red-650 p-1 rounded hover:bg-red-50 border border-slate-100 cursor-pointer"
-                                title="Delete Mapping"
-                              >
-                                <Trash2 className="h-3.5 w-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-[8px] text-slate-405 font-mono uppercase font-bold mb-1">
-                            STATEMENT EXCEL ROW HEADER NAME
-                          </label>
                           <input
                             type="text"
                             required
-                            placeholder="e.g. Cr Amt, Txn Date, Description"
+                            placeholder="Excel Header"
                             value={col.excelHeader}
                             onChange={(e) => handleUpdateBankExcelHeader(col.id, e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200/90 rounded px-2 py-1 text-xs font-mono font-bold text-slate-800 focus:outline-none focus:bg-white"
+                            className="bg-slate-50 border border-slate-200/80 rounded py-1 px-2 text-xs font-mono font-extrabold text-slate-800 uppercase placeholder-slate-300 focus:outline-none focus:border-indigo-500 focus:bg-white"
                           />
+                        </div>
+
+                        <div className="flex flex-col gap-1 shrink-0">
+                          {/* Hide Column Option */}
+                          <button
+                            type="button"
+                            onClick={() => handleToggleBankColumnVisibility(col.id)}
+                            className={`p-1 rounded border text-xs cursor-pointer transition-colors ${
+                              col.isHidden 
+                                ? "bg-red-50 text-red-500 border-red-200 hover:bg-red-100" 
+                                : "bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100"
+                            }`}
+                            title={col.isHidden ? "Hidden - This column will be ignored in parse" : "Active - Click to ignore column"}
+                          >
+                            {col.isHidden ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                          </button>
+
+                          {/* Delete Column Option */}
+                          {(col.isCustom || bIdx >= 6) && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveBankColumnRow(col.id)}
+                              className="bg-slate-50 hover:bg-red-50 hover:text-red-600 text-slate-400 p-1 rounded border border-slate-200 cursor-pointer"
+                              title="Delete Column Mapping"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                         </div>
                       </div>
                     ))}
@@ -989,21 +1392,162 @@ export default function ExcelGoogleSheetFormats({
               </form>
             )}
 
-            {/* CONFIGURATION LIST REGISTRY TAB */}
-            <div className="border border-slate-200 rounded-xl bg-white overflow-hidden shadow-3xs">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-150 text-[10px] tracking-wider uppercase text-slate-500 font-mono">
-                      <th className="p-3 text-center">S.No</th>
-                      <th className="p-3">Bank registry profile head</th>
-                      <th className="p-3">Columns configuration list</th>
-                      <th className="p-3 text-right">Action Controls</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 font-mono">
-                    {bankFormatMappings.map((item: any, idx) => {
-                      // Retrieve dynamic column mapping models
+            {(() => {
+              const sbiBankSchemas = bankFormatMappings.filter((s) => getBankCategory(s.bankName) === "SBI");
+              const hdfcBankSchemas = bankFormatMappings.filter((s) => getBankCategory(s.bankName) === "HDFC");
+              const iciciBankSchemas = bankFormatMappings.filter((s) => getBankCategory(s.bankName) === "ICICI");
+              const generalBankSchemas = bankFormatMappings.filter((s) => getBankCategory(s.bankName) === "GENERAL");
+
+              const sbiCount = sbiBankSchemas.length;
+              const hdfcCount = hdfcBankSchemas.length;
+              const iciciCount = iciciBankSchemas.length;
+              const generalBankCount = generalBankSchemas.length;
+
+              const filteredByBankCategory = bankFormatMappings.filter((s) => getBankCategory(s.bankName) === bankRegistryCategory);
+
+              // Extract unique clients present in filtered-by-category schemas
+              const activeBankClientIdsInCat = Array.from(new Set(filteredByBankCategory.map((s) => s.clientId || "all").filter(id => id !== "all")));
+              const uniqueBankClientsInCat = clientMasters.filter((c) => activeBankClientIdsInCat.includes(c.id));
+
+              // Schemas to display
+              const displayedBankSchemas = filteredByBankCategory.filter((schema) => {
+                if (bankRegistryClientId === "all") return true;
+                return (schema.clientId || "all") === bankRegistryClientId;
+              });
+
+              return (
+                <div className="space-y-4 text-left">
+                  <div className="flex flex-col gap-4 bg-slate-50/50 border border-slate-200/60 p-4 rounded-xl">
+                    <div className="flex justify-between items-center flex-wrap gap-2">
+                      <span className="text-xs font-extrabold text-slate-800 uppercase tracking-wide flex items-center gap-2">
+                        <Layers className="h-4 w-4 text-indigo-600" />
+                        Dynamic Bank Sheet Mapping Registry ({bankFormatMappings.length})
+                      </span>
+                    </div>
+
+                    {/* FIRST LEVEL CATEGORY TABS FOR BANK STATEMENT PROFILES */}
+                    <div className="flex flex-wrap gap-2 border-b border-slate-200/60 pb-1.5">
+                      {[
+                        { id: "SBI", label: "SBI Statements", icon: FileSpreadsheet, count: sbiCount },
+                        { id: "HDFC", label: "HDFC Statements", icon: Layers, count: hdfcCount },
+                        { id: "ICICI", label: "ICICI Statements", icon: FileText, count: iciciCount },
+                        { id: "GENERAL", label: "General & Other Banks", icon: Settings2, count: generalBankCount }
+                      ].map((tab) => {
+                        const isActive = bankRegistryCategory === tab.id;
+                        const IconComponent = tab.icon;
+                        return (
+                          <button
+                            key={tab.id}
+                            type="button"
+                            onClick={() => {
+                              setBankRegistryCategory(tab.id as any);
+                              setBankRegistryClientId("all"); // Reset client filter on category switch
+                              setBankTabClientSearchQuery(""); // Reset search query on category switch
+                            }}
+                            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer border ${
+                              isActive
+                                ? "bg-indigo-600 text-white border-indigo-600 shadow-2xs"
+                                : "bg-white hover:bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300"
+                            }`}
+                          >
+                            <IconComponent className={`h-3.5 w-3.5 ${isActive ? "text-white" : "text-slate-400"}`} />
+                            <span>{tab.label}</span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-mono font-bold ${
+                              isActive 
+                                ? "bg-white/20 text-white" 
+                                : "bg-slate-100 text-slate-500 border border-slate-200"
+                            }`}>
+                              {tab.count}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* SECOND LEVEL NESTED CLIENT FILTERS WITH SEARCH */}
+                    {filteredByBankCategory.length > 0 && (
+                      <div className="flex flex-col gap-3 bg-white p-3 rounded-xl border border-slate-200/50 shadow-3xs w-full">
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                          <span className="text-[10px] text-slate-500 uppercase font-mono font-bold tracking-wider flex items-center gap-1.5">
+                            📂 Choose Client Tab:
+                          </span>
+                          
+                          {/* Tab Search Input Box */}
+                          {uniqueBankClientsInCat.length > 1 && (
+                            <div className="relative max-w-xs w-full sm:w-64 flex items-center gap-1.5 bg-slate-50 border border-slate-250 rounded-lg px-2 py-1">
+                              <Search className="h-3 w-3 text-slate-400 shrink-0" />
+                              <input
+                                type="text"
+                                placeholder="Search client tabs..."
+                                value={bankTabClientSearchQuery}
+                                onChange={(e) => setBankTabClientSearchQuery(e.target.value)}
+                                className="w-full bg-transparent text-[10px] text-slate-750 outline-none border-none py-0 focus:ring-0 font-bold"
+                              />
+                              {bankTabClientSearchQuery && (
+                                <button
+                                  type="button"
+                                  onClick={() => setBankTabClientSearchQuery("")}
+                                  className="text-slate-400 hover:text-slate-650 text-[10px] font-black px-1"
+                                >
+                                  ✕
+                                </button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap gap-1.5 items-center">
+                          <button
+                            type="button"
+                            onClick={() => setBankRegistryClientId("all")}
+                            className={`px-3 py-1 rounded-full text-[10px] font-black cursor-pointer transition-all border ${
+                              bankRegistryClientId === "all"
+                                ? "bg-slate-800 text-white border-slate-800 shadow-3xs"
+                                : "bg-slate-100 hover:bg-slate-200/60 text-slate-650 border-slate-200"
+                            }`}
+                          >
+                            All Clients ({filteredByBankCategory.length})
+                          </button>
+                          {uniqueBankClientsInCat
+                            .filter((c) =>
+                              c.name.toLowerCase().includes(bankTabClientSearchQuery.toLowerCase()) ||
+                              (c.gstin && c.gstin.toLowerCase().includes(bankTabClientSearchQuery.toLowerCase()))
+                            )
+                            .map((c) => {
+                              const clientCount = filteredByBankCategory.filter(s => s.clientId === c.id).length;
+                              const isSelected = bankRegistryClientId === c.id;
+                              return (
+                                <button
+                                  key={c.id}
+                                  type="button"
+                                  onClick={() => setBankRegistryClientId(c.id)}
+                                  className={`px-3 py-1 rounded-full text-[10px] font-black cursor-pointer transition-all border ${
+                                    isSelected
+                                      ? "bg-indigo-600 text-white border-indigo-600 shadow-3xs"
+                                      : "bg-slate-50 hover:bg-slate-150 text-slate-650 border-slate-200"
+                                  }`}
+                                >
+                                  {c.name} ({clientCount})
+                                </button>
+                              );
+                            })}
+
+                          {uniqueBankClientsInCat.filter((c) =>
+                            c.name.toLowerCase().includes(bankTabClientSearchQuery.toLowerCase()) ||
+                            (c.gstin && c.gstin.toLowerCase().includes(bankTabClientSearchQuery.toLowerCase()))
+                          ).length === 0 && uniqueBankClientsInCat.length > 0 && (
+                            <span className="text-[10px] text-slate-400 font-mono italic p-1">
+                              No clients match search query
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Dynamic list in list format with cards and expansion (accordion) */}
+                  <div className="flex flex-col gap-3.5">
+                    {displayedBankSchemas.map((item) => {
                       let colsList: any[] = [];
                       if (item.columns && item.columns.length > 0) {
                         colsList = item.columns;
@@ -1011,98 +1555,177 @@ export default function ExcelGoogleSheetFormats({
                         // Rebuild fallback
                         colsList = [
                           { systemField: "Transaction Date", excelHeader: item.dateColumn, isHidden: false },
-                          { systemField: "Particulars", excelHeader: item.particularsColumn, isHidden: false },
-                          { systemField: "Chq No", excelHeader: item.chqNoColumn, isHidden: false },
-                          { systemField: "Debit", excelHeader: item.debitColumn, isHidden: false },
-                          { systemField: "Credit", excelHeader: item.creditColumn, isHidden: false },
-                          { systemField: "Balance", excelHeader: item.balanceColumn, isHidden: false }
+                          { systemField: "Particulars / Narration", excelHeader: item.particularsColumn, isHidden: false },
+                          { systemField: "Chq No / Ref No", excelHeader: item.chqNoColumn, isHidden: false },
+                          { systemField: "Debit (Withdrawals)", excelHeader: item.debitColumn, isHidden: false },
+                          { systemField: "Credit (Deposits)", excelHeader: item.creditColumn, isHidden: false },
+                          { systemField: "Running LEDGER Balance", excelHeader: item.balanceColumn, isHidden: false }
                         ];
                       }
 
-                      return (
-                        <tr key={item.id} className="hover:bg-slate-50/40 text-slate-700">
-                          <td className="p-3 text-center font-bold text-slate-350">{idx + 1}</td>
-                          <td className="p-3 font-extrabold text-slate-900 font-sans">
-                            {item.bankName}
-                          </td>
-                          <td className="p-3">
-                            <div className="flex flex-wrap gap-1">
-                              {colsList.map((col, cIdx) => (
-                                <span 
-                                  key={cIdx} 
-                                  className={`text-[9px] font-mono px-2 py-0.5 rounded border ${
-                                    col.isHidden 
-                                      ? "bg-red-50 text-red-700 border-red-150 line-through opacity-50" 
-                                      : "bg-slate-50 text-slate-850 border-slate-205 font-bold"
-                                  }`}
-                                  title={`${col.systemField} internally mapped to "${col.excelHeader}"`}
-                                >
-                                  {col.systemField}: <strong>{col.excelHeader}</strong>
-                                </span>
-                              ))}
-                            </div>
-                          </td>
-                          <td className="p-3 text-right">
-                            <div className="flex justify-end gap-1.5 items-center" onClick={(e) => e.stopPropagation()}>
-                              <button
-                                type="button"
-                                onClick={() => handleEditBankClick(item)}
-                                className="text-indigo-600 hover:text-indigo-900 p-1.5 rounded hover:bg-slate-50 border border-slate-100 bg-white shadow-3xs cursor-pointer"
-                                title="Modify Mapping form"
-                              >
-                                <Edit className="h-3.5 w-3.5" />
-                              </button>
+                      const isExpanded = !!expandedSchemaIds[item.id];
+                      const visibleCols = colsList.filter(c => !c.isHidden);
+                      const hiddenCols = colsList.filter(c => c.isHidden);
 
-                              {deletingBankId === item.id ? (
-                                <div className="flex items-center gap-1 bg-red-50 border border-red-200 rounded px-1.5 py-0.5 animate-fadeIn">
-                                  <span className="text-[8px] text-red-700 font-extrabold uppercase font-mono mr-1">Del?</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const updated = bankFormatMappings.filter(it => it.id !== item.id);
-                                      if (onSaveBankMappings) onSaveBankMappings(updated);
-                                      triggerFeedback(`Deleted bank structure: "${item.bankName}"`);
-                                      setDeletingBankId(null);
-                                    }}
-                                    className="bg-red-600 hover:bg-red-700 text-white text-[8px] font-black px-1.5 py-0.5 rounded cursor-pointer uppercase"
-                                  >
-                                    Yes
-                                  </button>
-                                  <button
-                                    type="button"
-                                    onClick={() => setDeletingBankId(null)}
-                                    className="bg-slate-205 hover:bg-slate-350 text-slate-700 text-[8px] font-bold px-1.5 py-0.5 rounded cursor-pointer uppercase"
-                                  >
-                                    No
-                                  </button>
+                      return (
+                        <div 
+                          key={item.id} 
+                          className={`bg-white border rounded-xl overflow-hidden transition-all text-left shadow-4xs ${
+                            isExpanded ? "border-amber-400 ring-1 ring-amber-100 pb-2" : "border-slate-200 hover:border-slate-350"
+                          }`}
+                        >
+                          {/* Collapsed Header */}
+                          <div 
+                            onClick={() => toggleSchemaExpand(item.id)}
+                            className="p-3.5 flex flex-col md:flex-row md:items-center justify-between cursor-pointer hover:bg-slate-50/50 select-none gap-3"
+                          >
+                            <div className="flex items-center gap-3 min-w-0 flex-1">
+                              {/* Checkbox to "tick" / click */}
+                              <input
+                                type="checkbox"
+                                checked={isExpanded}
+                                readOnly
+                                className="h-4 w-4 rounded text-amber-600 border-slate-300 focus:ring-amber-500 cursor-pointer pointer-events-none shrink-0"
+                              />
+                              
+                              <div className="flex flex-col md:flex-row md:items-center gap-2.5 min-w-0 flex-1">
+                                {/* HIGHLY HIGHLIGHTED CLIENT NAME BADGE */}
+                                <span className="inline-flex items-center gap-1.5 bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-black px-3 py-1 rounded-lg shrink-0 shadow-2xs">
+                                  <span className="text-xs">🏢</span>
+                                  <span className="tracking-tight uppercase">{item.clientName || "All Clients / General Standard Format"}</span>
+                                </span>
+
+                                <div className="min-w-0 flex-1">
+                                  <h4 className="font-extrabold text-xs text-slate-900 tracking-tight uppercase truncate">
+                                    {item.bankName}
+                                  </h4>
                                 </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteBankClick(item.id, item.bankName)}
-                                  className="text-red-400 hover:text-red-600 p-1.5 rounded hover:bg-slate-50 border border-slate-100 bg-white shadow-3xs cursor-pointer"
-                                  title="Discard bank setup"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
-                              )}
+                              </div>
                             </div>
-                          </td>
-                        </tr>
+
+                            <div className="flex items-center justify-between md:justify-end gap-4 shrink-0 border-t md:border-t-0 pt-2 md:pt-0 border-slate-100">
+                              <span className="bg-amber-50 text-amber-950 text-[9px] font-mono tracking-wider font-extrabold px-2 py-1 rounded-md border border-amber-200 shrink-0">
+                                🏦 {getBankCategory(item.bankName)}
+                              </span>
+                              
+                              <span className="text-[10px] text-slate-650 font-mono bg-slate-50 border border-slate-200 px-2 py-1 rounded font-black shrink-0">
+                                {visibleCols.length} Fields {hiddenCols.length > 0 && `(${hiddenCols.length} H)`}
+                              </span>
+                              <div className="text-slate-400 flex items-center shrink-0">
+                                {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Expanded Body */}
+                          {isExpanded && (
+                            <div className="p-4 border-t border-slate-100 bg-slate-50/20 space-y-4 animate-slideDown">
+                              {/* Metadata info */}
+                              <div className="grid grid-cols-1 md:grid-cols-4 gap-3 pb-3 border-b border-slate-100 text-xs">
+                                <div className="md:col-span-3">
+                                  <span className="block text-[9px] text-slate-400 font-mono uppercase font-extrabold">Registry Profile Type</span>
+                                  <p className="text-[11px] text-slate-650 font-medium mt-0.5">
+                                    Universally applicable {getBankCategory(item.bankName)} transaction import map profile.
+                                  </p>
+                                </div>
+                                <div className="md:text-right">
+                                  <span className="block text-[9px] text-slate-400 font-mono uppercase font-extrabold">Registered on Ledger</span>
+                                  <p className="text-[11px] text-slate-700 font-mono font-bold mt-0.5">
+                                    {item.createdAt ? new Date(item.createdAt).toLocaleDateString() : "System Standard"}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* Columns structure display */}
+                              <div>
+                                <span className="block text-[9px] text-indigo-755 font-bold font-mono uppercase tracking-wide mb-2">
+                                  📋 ACTIVE BANK COLUMN MATCH MAPS
+                                </span>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+                                  {colsList.map((col, cIdx) => (
+                                    <div 
+                                      key={cIdx} 
+                                      className={`p-2 rounded-lg border text-left flex flex-col justify-between ${
+                                        col.isHidden 
+                                          ? "bg-red-50/50 border-red-150/80 text-red-700 opacity-60" 
+                                          : "bg-white border-slate-200 text-slate-800"
+                                      }`}
+                                    >
+                                      <span className="text-[8px] font-mono font-bold text-slate-400 block mb-1 uppercase">
+                                        {col.systemField} {col.isHidden && "(HIDDEN)"}
+                                      </span>
+                                      <span className="text-[10px] font-mono font-black text-indigo-900 tracking-tight uppercase truncate">
+                                        {col.excelHeader || "—"}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              {/* Expanded footer action control buttons */}
+                              <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row gap-2 justify-between items-stretch sm:items-center bg-white -mx-4 -mb-6 px-4 py-3 bg-slate-50/80 border-b rounded-b-xl mt-4">
+                                <div className="flex gap-1.5 items-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEditBankClick(item)}
+                                    className="bg-white hover:bg-slate-100 hover:text-indigo-800 text-slate-700 border border-slate-250 font-bold text-[10px] px-2.5 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-3xs"
+                                  >
+                                    <Edit className="h-3 w-3 text-indigo-700" /> Edit Layout Form
+                                  </button>
+
+                                  {deletingBankId === item.id ? (
+                                    <div className="flex items-center gap-1 bg-red-50 border border-red-200 rounded-lg px-2 py-0.5 animate-fadeIn">
+                                      <span className="text-[9px] text-red-700 font-extrabold uppercase font-mono mr-1">Confirm?</span>
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          const updated = bankFormatMappings.filter(it => it.id !== item.id);
+                                          if (onSaveBankMappings) onSaveBankMappings(updated);
+                                          triggerFeedback(`Deleted bank structure: "${item.bankName}"`);
+                                          setDeletingBankId(null);
+                                        }}
+                                        className="bg-red-600 hover:bg-red-700 text-white text-[8.5px] font-black px-1.5 py-0.5 rounded cursor-pointer uppercase"
+                                      >
+                                        Yes
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => setDeletingBankId(null)}
+                                        className="bg-slate-205 hover:bg-slate-350 text-slate-700 text-[8.5px] font-bold px-1.5 py-0.5 rounded cursor-pointer uppercase"
+                                      >
+                                        No
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeleteBankClick(item.id, item.bankName)}
+                                      className="bg-white hover:bg-red-50 hover:text-red-700 text-slate-700 border border-slate-250 font-bold text-[10px] px-2.5 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer shadow-3xs"
+                                    >
+                                      <Trash2 className="h-3 w-3 text-red-500" /> Discard Bank Setup
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       );
                     })}
+                  </div>
 
-                    {bankFormatMappings.length === 0 && (
-                      <tr>
-                        <td colSpan={4} className="p-12 text-center text-slate-400 font-mono">
-                          No custom Bank configurations registered. Click 'Add New Bank Mapping' above to map column headers.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                  {displayedBankSchemas.length === 0 && (
+                    <div className="bg-white border border-slate-200 p-12 text-center rounded-2xl shadow-3xs max-w-md mx-auto">
+                      <Layers className="h-8 w-8 text-slate-300 mx-auto mb-2" />
+                      <h5 className="font-extrabold text-slate-700 text-xs uppercase font-mono">No Banks In This Tab</h5>
+                      <p className="text-[10px] text-slate-450 font-bold mt-1">
+                        No bank statement profiles have been mapped for {bankRegistryCategory} for the selected client yet.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Guide Explainer Card */}
             <div className="bg-indigo-50 border border-indigo-100 p-4 rounded-xl flex items-start gap-3 mt-4 text-[10px] text-slate-700 font-medium">

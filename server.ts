@@ -265,28 +265,37 @@ app.post("/api/gemini/chat", async (req, res) => {
     });
 
     let response = null;
-    const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.5-flash"];
+    const modelsToTry = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
     let lastError: any = null;
 
     for (const modelName of modelsToTry) {
-      try {
-        console.log(`[Chat API] Attempting model ${modelName}...`);
-        response = await ai.models.generateContent({
-          model: modelName,
-          contents: formattedContents,
-          config: {
-            systemInstruction,
-            temperature: 0.7,
-          },
-        });
-        if (response && response.text) {
-          lastError = null;
-          break;
+      let attempts = 3;
+      while (attempts > 0) {
+        try {
+          console.log(`[Chat API] Attempting model ${modelName} (Attempts remaining: ${attempts})...`);
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: formattedContents,
+            config: {
+              systemInstruction,
+              temperature: 0.7,
+            },
+          });
+          if (response && response.text) {
+            lastError = null;
+            break;
+          }
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[Chat API] Model ${modelName} attempt failed:`, err.message);
+          attempts--;
+          if (attempts > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * (3 - attempts)));
+          }
         }
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`[Chat API] Model ${modelName} failed:`, err.message);
-        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+      if (response && response.text) {
+        break;
       }
     }
 
@@ -314,7 +323,7 @@ app.post("/api/gemini/chat", async (req, res) => {
 // ----------------------------------------------------
 app.post("/api/gemini/scan", async (req, res) => {
   try {
-    const { base64, mimeType, clients = [] } = req.body;
+    const { base64, mimeType, clients = [], sops = {} } = req.body;
     if (!base64 || !mimeType) {
        res.status(400).json({ error: "Base64 string and mimeType are required." });
        return;
@@ -333,92 +342,109 @@ app.post("/api/gemini/scan", async (req, res) => {
       ? "Here is the list of registered clients. Study their details (name, gstin, type) carefully and identify if this document is associated with any of them. If the bill is a purchase, the client might be the purchaser/buyer. If it's a sale, the client is the seller, or the party list might contain them:\n" + JSON.stringify(clients, null, 2)
       : "No client master list is available. Deduce from document info.";
 
+    const sopsContext = sops && Object.keys(sops).length > 0
+      ? "Here are the Standard Operating Procedures (SOPs) and layout spatial coordinate rules created by the user for various suppliers. Use these coordinates and rules to extract values accurately without making mistakes. If the supplier of the invoice matches any of these, follow their coordinates/guidelines strictly:\n" + JSON.stringify(sops, null, 2)
+      : "No custom supplier SOP guidelines are provided yet.";
+
     const promptText = 
-      "Analyze this Indian purchase bill / tax invoice / mandi receiver details / bank statement / expense slip. " +
+      "Analyze the uploaded invoice/document image. You MUST extract all fields EXACTLY as they are printed in the image. " +
+      "CRITICAL: Do NOT make up, simulate, or hallucinate other details. Use the exact printed text, vendor names, invoice numbers, and amounts. " +
       "1. Extract the supplier's name, supplier's GSTIN, invoice or bill number, and invoice date. " +
-      "2. For every line item, identify the local name of grains/items, quantity, rate, taxable amount, GST Rate, GST Amount, and standard HSN code. " +
+      "2. For every line item, identify the exact printed name of items, quantity, rate, taxable amount, GST Rate, GST Amount, and HSN code from the table. " +
       "3. Identify which registered client this document belongs to. " + clientsContext + " " +
       "Return the matchedClientId and matchedClientName. If not found in list, guess the closest or leave blank. " +
       "4. Classify this document category. Must be one of: '01_Purchase_Bills', '02_Sale_Bills', '03_Bank_Statements', '04_Expenses_Bills', '05_Undefined_Documents', '06_Tax_Returns_&_Filings'. " +
       "Determine corresponding tab name: 'PURCHASE', 'SALES', 'BANK', 'EXPENSES', 'TAX_RETURNS', or 'UNDEFINED'. " +
       "Calculate total taxable amount, total GST, and overall grand total of the bill. " +
+      "5. Use these SOP rules for specific suppliers to help guide your spatial extraction or map specific terms:\n" + sopsContext + " " +
       "Generate a confidence score (from 0 to 100) for supplier info accuracy and item extraction accuracy.";
 
     let response = null;
-    const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.5-flash"];
+    const modelsToTry = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
     let lastError: any = null;
 
     for (const modelName of modelsToTry) {
-      try {
-        console.log(`[Scan API] Attempting model ${modelName}...`);
-        response = await ai.models.generateContent({
-          model: modelName,
-          contents: [imagePart, { text: promptText }],
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                supplierName: {
-                  type: Type.STRING,
-                  description: "Name of the vendor/supplier/arhatiya"
-                },
-                supplierGSTIN: {
-                  type: Type.STRING,
-                  description: "15-character Indian goods and services tax identifier of supplier. Leave empty if unreadable/not applicable."
-                },
-                invoiceNo: {
-                  type: Type.STRING,
-                  description: "Invoice serial number or bill number"
-                },
-                date: {
-                  type: Type.STRING,
-                  description: "Date of invoice in YYYY-MM-DD or standard readable text format"
-                },
-                items: {
-                  type: Type.ARRAY,
-                  description: "List of items parsed from the bill rows",
+      let attempts = 3;
+      while (attempts > 0) {
+        try {
+          console.log(`[Scan API] Attempting model ${modelName} (Attempts remaining: ${attempts})...`);
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: {
+              parts: [imagePart, { text: promptText }]
+            },
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  supplierName: {
+                    type: Type.STRING,
+                    description: "Name of the vendor/supplier/arhatiya"
+                  },
+                  supplierGSTIN: {
+                    type: Type.STRING,
+                    description: "15-character Indian goods and services tax identifier of supplier. Leave empty if unreadable/not applicable."
+                  },
+                  invoiceNo: {
+                    type: Type.STRING,
+                    description: "Invoice serial number or bill number"
+                  },
+                  date: {
+                    type: Type.STRING,
+                    description: "Date of invoice in YYYY-MM-DD or standard readable text format"
+                  },
                   items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      localName: { type: Type.STRING, description: "Raw name of grain / item in local language or Hindi/English on bill" },
-                      quantity: { type: Type.NUMBER, description: "Quantity in kg, quintal, bags, or numbers" },
-                      rate: { type: Type.NUMBER, description: "Price per unit as list on bill" },
-                      taxableAmount: { type: Type.NUMBER, description: "Row total before GST" },
-                      gstRate: { type: Type.NUMBER, description: "GST percentile e.g. 5, 0, 12, 18, etc. Default is 0 for grains" },
-                      gstAmount: { type: Type.NUMBER, description: "GST tax calculated in row" },
-                      hsnCode: { type: Type.STRING, description: "HSN code parsed or deduced based on standard grain codes" },
-                      totalAmount: { type: Type.NUMBER, description: "Row total including GST" }
-                    },
-                    required: ["localName", "quantity", "rate", "taxableAmount", "gstRate", "gstAmount", "totalAmount"]
-                  }
+                    type: Type.ARRAY,
+                    description: "List of items parsed from the bill rows",
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        localName: { type: Type.STRING, description: "Raw name of grain / item in local language or Hindi/English on bill" },
+                        quantity: { type: Type.NUMBER, description: "Quantity in kg, quintal, bags, or numbers" },
+                        rate: { type: Type.NUMBER, description: "Price per unit as list on bill" },
+                        taxableAmount: { type: Type.NUMBER, description: "Row total before GST" },
+                        gstRate: { type: Type.NUMBER, description: "GST percentile e.g. 5, 0, 12, 18, etc. Default is 0 for grains" },
+                        gstAmount: { type: Type.NUMBER, description: "GST tax calculated in row" },
+                        hsnCode: { type: Type.STRING, description: "HSN code parsed or deduced based on standard grain codes" },
+                        totalAmount: { type: Type.NUMBER, description: "Row total including GST" }
+                      },
+                      required: ["localName", "quantity", "rate", "taxableAmount", "gstRate", "gstAmount", "totalAmount"]
+                    }
+                  },
+                  taxableAmountTotal: { type: Type.NUMBER, description: "Sum of row taxable amounts" },
+                  gstAmountTotal: { type: Type.NUMBER, description: "Sum of GST tax amounts" },
+                  totalAmountTotal: { type: Type.NUMBER, description: "Overall check grand total" },
+                  matchedClientId: { type: Type.STRING, description: "The ID of the registered client from the clients array that this document is associated with. Leave empty if none matches." },
+                  matchedClientName: { type: Type.STRING, description: "The Name of the matched client from the clients array." },
+                  documentType: { type: Type.STRING, description: "Determined category: '01_Purchase_Bills', '02_Sale_Bills', '03_Bank_Statements', '04_Expenses_Bills', '05_Undefined_Documents', '06_Tax_Returns_&_Filings'" },
+                  documentTypeName: { type: Type.STRING, description: "Corresponding sheet tab title: 'PURCHASE', 'SALES', 'BANK', 'EXPENSES', 'TAX_RETURNS', or 'UNDEFINED'" },
+                  confidenceScoreSupplier: { type: Type.INTEGER, description: "Internal prediction confidence percent (0-100)" },
+                  confidenceScoreItems: { type: Type.INTEGER, description: "Row items detection accuracy percent (0-100)" }
                 },
-                taxableAmountTotal: { type: Type.NUMBER, description: "Sum of row taxable amounts" },
-                gstAmountTotal: { type: Type.NUMBER, description: "Sum of GST tax amounts" },
-                totalAmountTotal: { type: Type.NUMBER, description: "Overall check grand total" },
-                matchedClientId: { type: Type.STRING, description: "The ID of the registered client from the clients array that this document is associated with. Leave empty if none matches." },
-                matchedClientName: { type: Type.STRING, description: "The Name of the matched client from the clients array." },
-                documentType: { type: Type.STRING, description: "Determined category: '01_Purchase_Bills', '02_Sale_Bills', '03_Bank_Statements', '04_Expenses_Bills', '05_Undefined_Documents', '06_Tax_Returns_&_Filings'" },
-                documentTypeName: { type: Type.STRING, description: "Corresponding sheet tab title: 'PURCHASE', 'SALES', 'BANK', 'EXPENSES', 'TAX_RETURNS', or 'UNDEFINED'" },
-                confidenceScoreSupplier: { type: Type.INTEGER, description: "Internal prediction confidence percent (0-100)" },
-                confidenceScoreItems: { type: Type.INTEGER, description: "Row items detection accuracy percent (0-100)" }
-              },
-              required: [
-                "supplierName", "invoiceNo", "date", "items", "taxableAmountTotal", 
-                "gstAmountTotal", "totalAmountTotal", "matchedClientId", "matchedClientName", 
-                "documentType", "documentTypeName", "confidenceScoreSupplier", "confidenceScoreItems"
-              ]
+                required: [
+                  "supplierName", "invoiceNo", "date", "items", "taxableAmountTotal", 
+                  "gstAmountTotal", "totalAmountTotal", "matchedClientId", "matchedClientName", 
+                  "documentType", "documentTypeName", "confidenceScoreSupplier", "confidenceScoreItems"
+                ]
+              }
             }
+          });
+          if (response && response.text) {
+            lastError = null;
+            break;
           }
-        });
-        if (response && response.text) {
-          lastError = null;
-          break;
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[Scan API] Model ${modelName} attempt failed:`, err.message);
+          attempts--;
+          if (attempts > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * (3 - attempts)));
+          }
         }
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`[Scan API] Model ${modelName} failed:`, err.message);
-        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+      if (response && response.text) {
+        break;
       }
     }
 
@@ -509,50 +535,61 @@ app.post("/api/gemini/scan-master-items", async (req, res) => {
       "7. clientName: If the list belongs to or mentions a particular client/customer/vendor (e.g. 'Saraswati Traders', 'Ram Lal Store'), extract it. If not found, use 'General'.";
 
     let response = null;
-    const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash", "gemini-3.5-flash"];
+    const modelsToTry = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
     let lastError: any = null;
 
     for (const modelName of modelsToTry) {
-      try {
-        console.log(`[Parse Registry API] Attempting model ${modelName}...`);
-        response = await ai.models.generateContent({
-          model: modelName,
-          contents: [imagePart, { text: promptText }],
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                items: {
-                  type: Type.ARRAY,
-                  description: "List of parsed master items ready for registry insertion",
+      let attempts = 3;
+      while (attempts > 0) {
+        try {
+          console.log(`[Parse Registry API] Attempting model ${modelName} (Attempts remaining: ${attempts})...`);
+          response = await ai.models.generateContent({
+            model: modelName,
+            contents: {
+              parts: [imagePart, { text: promptText }]
+            },
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
                   items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      itemName: { type: Type.STRING, description: "Name/Category on ERP Registry" },
-                      printName: { type: Type.STRING, description: "Detailed supplier print name" },
-                      group: { type: Type.STRING, description: "Group / Sector" },
-                      unit: { type: Type.STRING, description: "Packing Unit" },
-                      gstRate: { type: Type.STRING, description: "GST rate percentage string e.g. 18%, 0%, 5%" },
-                      hsn: { type: Type.STRING, description: "HSN Code string" },
-                      clientName: { type: Type.STRING, description: "Client mapping name or General if general" }
-                    },
-                    required: ["itemName", "printName", "group", "unit", "gstRate", "hsn", "clientName"]
+                    type: Type.ARRAY,
+                    description: "List of parsed master items ready for registry insertion",
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        itemName: { type: Type.STRING, description: "Name/Category on ERP Registry" },
+                        printName: { type: Type.STRING, description: "Detailed supplier print name" },
+                        group: { type: Type.STRING, description: "Group / Sector" },
+                        unit: { type: Type.STRING, description: "Packing Unit" },
+                        gstRate: { type: Type.STRING, description: "GST rate percentage string e.g. 18%, 0%, 5%" },
+                        hsn: { type: Type.STRING, description: "HSN Code string" },
+                        clientName: { type: Type.STRING, description: "Client mapping name or General if general" }
+                      },
+                      required: ["itemName", "printName", "group", "unit", "gstRate", "hsn", "clientName"]
+                    }
                   }
-                }
-              },
-              required: ["items"]
+                },
+                required: ["items"]
+              }
             }
+          });
+          if (response && response.text) {
+            lastError = null;
+            break;
           }
-        });
-        if (response && response.text) {
-          lastError = null;
-          break;
+        } catch (err: any) {
+          lastError = err;
+          console.warn(`[Parse Registry API] Model ${modelName} attempt failed:`, err.message);
+          attempts--;
+          if (attempts > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000 * (3 - attempts)));
+          }
         }
-      } catch (err: any) {
-        lastError = err;
-        console.warn(`[Parse Registry API] Model ${modelName} failed:`, err.message);
-        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+      if (response && response.text) {
+        break;
       }
     }
 

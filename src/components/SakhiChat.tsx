@@ -190,8 +190,8 @@ export default function SakhiChat({
   }, [sakhiLang]);
 
   // Hands-free & Interruption References
-  const [isHandsFree, setIsHandsFree] = useState(true);
-  const isHandsFreeRef = useRef(true);
+  const [isHandsFree, setIsHandsFree] = useState(false);
+  const isHandsFreeRef = useRef(false);
   const speakingIdRef = useRef<string | null>(null);
   const speakingTextRef = useRef<string>("");
   const isFetchingRef = useRef(false);
@@ -270,17 +270,9 @@ export default function SakhiChat({
     return () => clearInterval(interval);
   }, [isHandsFree, messages]);
 
-  // Start continuous passive voice recognition on mount
+  // Start continuous passive voice recognition on mount only if manually enabled
   useEffect(() => {
-    // Small delay to let browser settle inside sandbox
-    const timer = setTimeout(() => {
-      isHandsFreeRef.current = true;
-      setIsHandsFree(true);
-      startVoiceInputRecognition();
-    }, 600);
-
     return () => {
-      clearTimeout(timer);
       if (window.speechSynthesis) {
         window.speechSynthesis.cancel();
       }

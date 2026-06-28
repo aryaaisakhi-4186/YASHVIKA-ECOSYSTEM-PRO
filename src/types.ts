@@ -40,6 +40,9 @@ export interface MasterItem {
   gstRate: string; // e.g. "0%", "5%", "12%", "18%", "28%"
   hsn: string;
   clientName?: string; // Optional client mapping for optimized filtering
+  mappingName?: string; // Regular/scanned item name mapping
+  saleAccount?: string; // Sale account specification
+  purchaseAccount?: string; // Purchase account specification
 }
 
 export interface ItemMapping {
@@ -134,6 +137,9 @@ export interface BankFormatMapping {
   debitColumn: string;
   creditColumn: string;
   balanceColumn: string;
+  clientId?: string;
+  clientName?: string;
+  columns?: any[];
   createdAt: string;
 }
 

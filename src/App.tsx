@@ -1356,6 +1356,7 @@ export default function App() {
               onAddMapping={handleAddMapping}
               masterItems={masterItems}
               onTabChange={setActiveTab}
+              clientMasters={clientMasters}
             />
           )}
 

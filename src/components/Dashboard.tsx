@@ -1143,6 +1143,51 @@ export default function Dashboard({
                                 className="w-full p-1 border border-slate-200 rounded font-mono text-[11px] bg-white text-slate-800 focus:outline-none focus:border-amber-500"
                               />
                             </div>
+                            <div>
+                              <span className="text-[9px] text-slate-400 block font-bold">Mapping Name (Synonym)</span>
+                              <input 
+                                type="text"
+                                value={newMasterItemsFields[it.localName]?.mappingName !== undefined ? newMasterItemsFields[it.localName]?.mappingName : it.localName}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setNewMasterItemsFields(prev => ({
+                                    ...prev,
+                                    [it.localName]: { ...prev[it.localName], mappingName: val }
+                                  }));
+                                }}
+                                className="w-full p-1 border border-slate-200 rounded font-mono text-[11px] bg-white text-slate-800 focus:outline-none focus:border-amber-500"
+                              />
+                            </div>
+                            <div>
+                              <span className="text-[9px] text-slate-400 block font-bold">Sale Account</span>
+                              <input 
+                                type="text"
+                                value={newMasterItemsFields[it.localName]?.saleAccount !== undefined ? newMasterItemsFields[it.localName]?.saleAccount : "Sales A/c"}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setNewMasterItemsFields(prev => ({
+                                    ...prev,
+                                    [it.localName]: { ...prev[it.localName], saleAccount: val }
+                                  }));
+                                }}
+                                className="w-full p-1 border border-slate-200 rounded font-mono text-[11px] bg-white text-slate-800 focus:outline-none focus:border-amber-500"
+                              />
+                            </div>
+                            <div className="col-span-2">
+                              <span className="text-[9px] text-slate-400 block font-bold">Purchase Account</span>
+                              <input 
+                                type="text"
+                                value={newMasterItemsFields[it.localName]?.purchaseAccount !== undefined ? newMasterItemsFields[it.localName]?.purchaseAccount : "Purchase A/c"}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setNewMasterItemsFields(prev => ({
+                                    ...prev,
+                                    [it.localName]: { ...prev[it.localName], purchaseAccount: val }
+                                  }));
+                                }}
+                                className="w-full p-1 border border-slate-200 rounded font-mono text-[11px] bg-white text-slate-800 focus:outline-none focus:border-amber-500"
+                              />
+                            </div>
                           </div>
                         )}
                         
@@ -1175,17 +1220,23 @@ export default function Dashboard({
                           group: "General Goods",
                           unit: "Pcs.",
                           gstRate: `${it.gstRate || 18}%`,
-                          hsn: it.hsnCode || "69101000"
+                          hsn: it.hsnCode || "69101000",
+                          mappingName: it.localName,
+                          saleAccount: "Sales A/c",
+                          purchaseAccount: "Purchase A/c"
                         };
 
                         if (onAddMasterItem) {
                           onAddMasterItem({
                             itemName: it.localName,
                             printName: it.localName,
-                            group: fields.group,
-                            unit: fields.unit,
-                            gstRate: fields.gstRate,
-                            hsn: fields.hsn
+                            group: fields.group || "General Goods",
+                            unit: fields.unit || "Pcs.",
+                            gstRate: fields.gstRate || `${it.gstRate || 18}%`,
+                            hsn: fields.hsn || it.hsnCode || "69101000",
+                            mappingName: fields.mappingName !== undefined ? fields.mappingName : it.localName,
+                            saleAccount: fields.saleAccount !== undefined ? fields.saleAccount : "Sales A/c",
+                            purchaseAccount: fields.purchaseAccount !== undefined ? fields.purchaseAccount : "Purchase A/c",
                           });
                         }
                         

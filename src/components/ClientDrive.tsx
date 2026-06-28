@@ -77,6 +77,7 @@ export default function ClientDrive({
 
   // Selected subfolder inside workspace (by default 01_Purchase_Bills)
   const [selectedFolder, setSelectedFolder] = useState<string>("01_Purchase_Bills");
+  const [ledgerSubTab, setLedgerSubTab] = useState<"purchase" | "sales">("purchase");
 
   // Google OAuth State
   const [googleUser, setGoogleUser] = useState<User | null>(null);
@@ -203,32 +204,58 @@ export default function ClientDrive({
     setLoadingDrive(true);
     try {
       console.log(`Synchronizing workspace credentials for client: ${client.name}`);
-      const folders = await searchClientFolders(token, client.name);
       
       let rootId = "";
-      if (folders && folders.length > 0) {
-        const matched = folders[0];
-        setMatchedFolder(matched);
-        rootId = matched.id;
-      } else {
-        // Automatically create parent folder: "Yashvika Accounting-<Client_Name>" to avoid manual efforts
-        const parentName = `${client.name}`;
-        const createUrl = "https://www.googleapis.com/drive/v3/files";
-        const cRes = await fetch(createUrl, {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            name: parentName,
-            mimeType: "application/vnd.google-apps.folder"
-          })
-        });
-        if (cRes.ok) {
-          const nf = await cRes.json();
-          setMatchedFolder(nf);
-          rootId = nf.id;
+      let matched: any = null;
+
+      // 1. Attempt using original driveFolderId from master registry if present
+      if (client.driveFolderId && client.driveFolderId.trim() !== "") {
+        try {
+          console.log(`[Drive Core] Querying direct driveFolderId "${client.driveFolderId}" for client ${client.name}`);
+          const url = `https://www.googleapis.com/drive/v3/files/${client.driveFolderId}?fields=id,name,webViewLink,shared,parents`;
+          const res = await fetch(url, {
+            headers: { Authorization: `Bearer ${token}` }
+          });
+          if (res.ok) {
+            matched = await res.json();
+            setMatchedFolder(matched);
+            rootId = matched.id;
+            console.log(`[Drive Core] Successfully verified & loaded original folder "${matched.name}" from Google Drive.`);
+          } else {
+            console.warn(`[Drive Core] Stored driveFolderId "${client.driveFolderId}" returned status ${res.status}. Falling back to name-based search.`);
+          }
+        } catch (err) {
+          console.error("[Drive Core] Direct folder query error:", err);
+        }
+      }
+
+      // 2. Fallback to name search or create new folder
+      if (!rootId) {
+        const folders = await searchClientFolders(token, client.name);
+        if (folders && folders.length > 0) {
+          matched = folders[0];
+          setMatchedFolder(matched);
+          rootId = matched.id;
+        } else {
+          // Automatically create parent folder: "Yashvika Accounting-<Client_Name>" to avoid manual efforts
+          const parentName = `${client.name}`;
+          const createUrl = "https://www.googleapis.com/drive/v3/files";
+          const cRes = await fetch(createUrl, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify({
+              name: parentName,
+              mimeType: "application/vnd.google-apps.folder"
+            })
+          });
+          if (cRes.ok) {
+            const nf = await cRes.json();
+            setMatchedFolder(nf);
+            rootId = nf.id;
+          }
         }
       }
 
@@ -366,14 +393,25 @@ export default function ClientDrive({
       reader.readAsDataURL(file);
       const base64Content = await base64Promise;
 
-      // Pass current clients to the AI context so it can identify the correct client!
+      // Pass current clients and SOP map rules to the AI context so it can identify correctly!
+      let localSops = {};
+      try {
+        const savedSops = localStorage.getItem("yashvika_sops");
+        if (savedSops) {
+          localSops = JSON.parse(savedSops);
+        }
+      } catch (err) {
+        console.warn("Failed to load local SOP guidelines for scan pipeline:", err);
+      }
+
       const scanRes = await fetch("/api/gemini/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           base64: base64Content,
           mimeType: file.type || "image/jpeg",
-          clients: clientMasters
+          clients: clientMasters,
+          sops: localSops
         })
       });
 
@@ -420,27 +458,48 @@ export default function ClientDrive({
 
       if (tokenToUse) {
         // Find or create parent folder
-        const folders = await searchClientFolders(tokenToUse, clientName);
         let folderId = "";
-        if (folders && folders.length > 0) {
-          folderId = folders[0].id;
-        } else {
-          // Create parent folder
-          const cUrl = "https://www.googleapis.com/drive/v3/files";
-          const cr = await fetch(cUrl, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${tokenToUse}`,
-              "Content-Type": "application/json"
-            },
-            body: JSON.stringify({
-              name: clientName,
-              mimeType: "application/vnd.google-apps.folder"
-            })
-          });
-          if (cr.ok) {
-            const nf = await cr.json();
-            folderId = nf.id;
+        
+        if (targetClient.driveFolderId && targetClient.driveFolderId.trim() !== "") {
+          try {
+            console.log(`[Pipeline] Verifying pre-saved driveFolderId "${targetClient.driveFolderId}" for client ${targetClient.name}`);
+            const url = `https://www.googleapis.com/drive/v3/files/${targetClient.driveFolderId}?fields=id`;
+            const res = await fetch(url, {
+              headers: { Authorization: `Bearer ${tokenToUse}` }
+            });
+            if (res.ok) {
+              folderId = targetClient.driveFolderId;
+              console.log(`[Pipeline] Successfully verified original folder ID: ${folderId}`);
+            } else {
+              console.warn(`[Pipeline] Pre-saved folder ID "${targetClient.driveFolderId}" returned status ${res.status}. Falling back to search.`);
+            }
+          } catch (err) {
+            console.error("[Pipeline] Stored folder verify failed:", err);
+          }
+        }
+
+        if (!folderId) {
+          const folders = await searchClientFolders(tokenToUse, clientName);
+          if (folders && folders.length > 0) {
+            folderId = folders[0].id;
+          } else {
+            // Create parent folder
+            const cUrl = "https://www.googleapis.com/drive/v3/files";
+            const cr = await fetch(cUrl, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${tokenToUse}`,
+                "Content-Type": "application/json"
+              },
+              body: JSON.stringify({
+                name: clientName,
+                mimeType: "application/vnd.google-apps.folder"
+              })
+            });
+            if (cr.ok) {
+              const nf = await cr.json();
+              folderId = nf.id;
+            }
           }
         }
 
@@ -1095,10 +1154,38 @@ export default function ClientDrive({
                   {/* TAB 2: ACTIVE CLIENT MASTER SPREADSHEET LEDGER VIEW */}
                   {tabIndex === "accounting_sheet" && (
                     <div className="space-y-4 animate-fade-in text-xs">
-                      <div className="flex justify-between items-center pb-2 border-b border-slate-200/70 flex-wrap gap-2 font-mono">
-                        <span className="text-[9px] uppercase font-black text-slate-400 tracking-wider">
-                          Reconciled Sheet Ledger Rows
-                        </span>
+                      <div className="flex justify-between items-center pb-2 border-b border-slate-200/70 flex-wrap gap-3 font-mono">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <span className="text-[10px] uppercase font-black text-slate-500 tracking-wider">
+                            Reconciled Sheets Logs
+                          </span>
+                          
+                          {/* Inner Tabs for Purchase and Sales schemas */}
+                          <div className="flex p-0.5 bg-slate-200/80 border border-slate-300 rounded-xl gap-0.5">
+                            <button
+                              type="button"
+                              onClick={() => setLedgerSubTab("purchase")}
+                              className={`px-3 py-1 rounded-lg text-[9px] uppercase font-bold tracking-wider transition-all cursor-pointer ${
+                                ledgerSubTab === "purchase"
+                                  ? "bg-slate-900 text-white shadow-xs"
+                                  : "text-slate-600 hover:text-slate-900"
+                              }`}
+                            >
+                              📥 Purchase Schema
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setLedgerSubTab("sales")}
+                              className={`px-3 py-1 rounded-lg text-[9px] uppercase font-bold tracking-wider transition-all cursor-pointer ${
+                                ledgerSubTab === "sales"
+                                  ? "bg-indigo-700 text-white shadow-xs"
+                                  : "text-indigo-650 hover:text-indigo-900"
+                              }`}
+                            >
+                              📤 Sales Schema
+                            </button>
+                          </div>
+                        </div>
                         
                         {googleToken && sheetLink && (
                           <div className="flex items-center gap-2">
@@ -1114,41 +1201,189 @@ export default function ClientDrive({
                         )}
                       </div>
 
-                      <div className="overflow-x-auto bg-white border border-slate-205 rounded-2xl shadow-xs max-h-[340px] overflow-y-auto">
-                        <table className="w-full text-left text-xs border-collapse text-slate-700">
-                          <thead className="bg-slate-50 border-b border-slate-200 font-mono text-[9px] uppercase text-zinc-400 tracking-wider sticky top-0">
-                            <tr>
-                              <th className="p-3">Date</th>
-                              <th className="p-3">Inv No</th>
-                              <th className="p-3">Vendor/Party</th>
-                              <th className="p-3 text-center">Taxable Base</th>
-                              <th className="p-3 text-center">GST summary</th>
-                              <th className="p-3 text-right">Total Amt</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 font-mono">
-                            {matchedLedgerRows.length === 0 ? (
+                      <div className="overflow-x-auto bg-white border border-slate-205 rounded-2xl shadow-3xs max-h-[420px] overflow-y-auto custom-scrollbar">
+                        {ledgerSubTab === "purchase" ? (
+                          <table className="w-full text-left text-xs border-collapse text-slate-700 whitespace-nowrap">
+                            <thead className="bg-slate-50 border-b border-slate-200 font-mono text-[9px] uppercase text-zinc-400 tracking-wider sticky top-0 z-10">
                               <tr>
-                                <td colSpan={6} className="p-6 text-center text-slate-400 text-[11px] font-sans">
-                                  No transaction records found matching this client. Upload or scan invoices in the AI sorter to record dynamically in the spreadsheet.
-                                </td>
+                                <th className="p-3 border-r border-slate-100">SERIES</th>
+                                <th className="p-3 border-r border-slate-100">DATE</th>
+                                <th className="p-3 border-r border-slate-100">VCH NO</th>
+                                <th className="p-3 border-r border-slate-100">PURCHASE TYPE</th>
+                                <th className="p-3 border-r border-slate-100">PARTY NAME</th>
+                                <th className="p-3 border-r border-slate-100">TYPE OF DEALER</th>
+                                <th className="p-3 border-r border-slate-100">BILLED PARTY</th>
+                                <th className="p-3 border-r border-slate-100">ADDRESS</th>
+                                <th className="p-3 border-r border-slate-100">STATE</th>
+                                <th className="p-3 border-r border-slate-100">GSTIN</th>
+                                <th className="p-3 border-r border-slate-100">ITEM NAME</th>
+                                <th className="p-3 border-r border-slate-100 text-center">QTY</th>
+                                <th className="p-3 border-r border-slate-100 text-center">UNIT</th>
+                                <th className="p-3 border-r border-slate-100 text-right">AMOUNT</th>
+                                <th className="p-3 border-r border-slate-100">BS_NAME</th>
+                                <th className="p-3 border-r border-slate-100 text-right">BS_AMOUNT</th>
+                                <th className="p-3 border-r border-slate-100">Bill Link (Drive)</th>
+                                <th className="p-3">Status (Draft/Final)</th>
                               </tr>
-                            ) : (
-                              matchedLedgerRows.map((row, idx) => (
-                                <tr key={idx} className="hover:bg-slate-50/50">
-                                  <td className="p-3">{row.date}</td>
-                                  <td className="p-3 font-bold text-slate-900">{row.invoiceNo}</td>
-                                  <td className="p-3 font-sans font-bold text-slate-800 truncate max-w-[120px]">
-                                    {row.vendorName}
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+                              {matchedLedgerRows.length === 0 ? (
+                                <tr>
+                                  <td colSpan={18} className="p-8 text-center text-slate-400 text-[11px] font-sans">
+                                    No purchase transaction records found. Upload or scan invoices in the AI sorter to record dynamically.
                                   </td>
-                                  <td className="p-3 text-center">₹{row.taxableAmount.toLocaleString()}</td>
-                                  <td className="p-3 text-center font-bold text-slate-500">{row.gstRateSummary || "0%"}</td>
-                                  <td className="p-3 text-right font-black text-indigo-600">₹{row.totalAmount.toLocaleString()}</td>
                                 </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
+                              ) : (
+                                matchedLedgerRows.map((row, idx) => {
+                                  const typeOfDealer = row.gstin ? "Registered" : "Unregistered";
+                                  const stateName = row.gstin ? (row.gstin.startsWith("06") ? "Haryana" : "Out of State") : "Haryana";
+                                  return (
+                                    <tr key={idx} className="hover:bg-slate-50/50">
+                                      <td className="p-3 border-r border-slate-100 text-slate-400 font-bold">A</td>
+                                      <td className="p-3 border-r border-slate-100">{row.date}</td>
+                                      <td className="p-3 border-r border-slate-100 font-bold text-slate-900">{row.invoiceNo}</td>
+                                      <td className="p-3 border-r border-slate-100 text-indigo-700 font-bold">
+                                        GST {row.gstRateSummary ? row.gstRateSummary.split(",")[0] : "18%"}
+                                      </td>
+                                      <td className="p-3 border-r border-slate-100 font-sans font-bold text-slate-800 max-w-[150px] truncate">
+                                        {row.vendorName}
+                                      </td>
+                                      <td className="p-3 border-r border-slate-100">
+                                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                                          row.gstin ? "bg-emerald-50 text-emerald-700 border border-emerald-150" : "bg-amber-50 text-amber-700 border border-amber-150"
+                                        }`}>
+                                          {typeOfDealer}
+                                        </span>
+                                      </td>
+                                      <td className="p-3 border-r border-slate-100 font-sans truncate max-w-[120px]">{activeClient?.name || "N/A"}</td>
+                                      <td className="p-3 border-r border-slate-100 font-sans truncate max-w-[150px] text-slate-500">{activeClient?.address || "N/A"}</td>
+                                      <td className="p-3 border-r border-slate-100">{stateName}</td>
+                                      <td className="p-3 border-r border-slate-100 font-mono text-slate-600">{row.gstin || "N/A"}</td>
+                                      <td className="p-3 border-r border-slate-100 font-sans truncate max-w-[150px]" title={row.itemSummary}>{row.itemSummary}</td>
+                                      <td className="p-3 border-r border-slate-100 text-center font-bold">1</td>
+                                      <td className="p-3 border-r border-slate-100 text-center text-slate-500">PCS</td>
+                                      <td className="p-3 border-r border-slate-100 text-right font-bold text-slate-900">₹{row.taxableAmount.toLocaleString()}</td>
+                                      <td className="p-3 border-r border-slate-100 text-slate-500">CGST/SGST</td>
+                                      <td className="p-3 border-r border-slate-100 text-right font-semibold text-purple-700">₹{row.gstAmount.toLocaleString()}</td>
+                                      <td className="p-3 border-r border-slate-100 text-sky-600 underline cursor-pointer truncate max-w-[130px]" title="Click to view Google Drive Folder">
+                                        <a 
+                                          href={activeClient?.driveFolderId ? `https://drive.google.com/drive/folders/${activeClient.driveFolderId}` : "https://drive.google.com"}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="hover:text-sky-500"
+                                        >
+                                          {activeClient?.driveFolderId ? `Drive: ${activeClient.name}` : "https://drive.google.com"}
+                                        </a>
+                                      </td>
+                                      <td className="p-3">
+                                        <span className="bg-emerald-50 text-emerald-700 text-[9px] px-1.5 py-0.5 rounded border border-emerald-200 font-bold uppercase">
+                                          FINAL
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  );
+                                })
+                              )}
+                            </tbody>
+                          </table>
+                        ) : (
+                          <table className="w-full text-left text-xs border-collapse text-slate-700 whitespace-nowrap">
+                            <thead className="bg-slate-50 border-b border-slate-200 font-mono text-[9px] uppercase text-zinc-400 tracking-wider sticky top-0 z-10">
+                              <tr>
+                                <th className="p-3 border-r border-slate-100">SERIES</th>
+                                <th className="p-3 border-r border-slate-100">DATE</th>
+                                <th className="p-3 border-r border-slate-100">Invoice No</th>
+                                <th className="p-3 border-r border-slate-100">SALE TYPE</th>
+                                <th className="p-3 border-r border-slate-100">GSTIN</th>
+                                <th className="p-3 border-r border-slate-100">PARTY NAME</th>
+                                <th className="p-3 border-r border-slate-100">FOR / MOTOR CUT</th>
+                                <th className="p-3 border-r border-slate-100 text-right">TOTAL FREIGHT</th>
+                                <th className="p-3 border-r border-slate-100 text-right">ADVANCE FREIGHT</th>
+                                <th className="p-3 border-r border-slate-100 text-right">BALANCE FREIGHT</th>
+                                <th className="p-3 border-r border-slate-100 text-right">ADVANCE (CASH)</th>
+                                <th className="p-3 border-r border-slate-100 text-right">ADVANCE (BANK)</th>
+                                <th className="p-3 border-r border-slate-100">ITEMS</th>
+                                <th className="p-3 border-r border-slate-100 text-center">Qty</th>
+                                <th className="p-3 border-r border-slate-100 text-center">Unit</th>
+                                <th className="p-3 border-r border-slate-100 text-right">Amount</th>
+                                <th className="p-3 border-r border-slate-100">Bs-1</th>
+                                <th className="p-3 border-r border-slate-100 text-right">BS Amout-1</th>
+                                <th className="p-3 border-r border-slate-100">Bs-2</th>
+                                <th className="p-3 border-r border-slate-100 text-right">BS Amout-2</th>
+                                <th className="p-3 border-r border-slate-100">Bs-3</th>
+                                <th className="p-3 border-r border-slate-100 text-right">BS Amout-3</th>
+                                <th className="p-3 border-r border-slate-100">settlement account</th>
+                                <th className="p-3 border-r border-slate-100 text-right">settlement amount</th>
+                                <th className="p-3 border-r border-slate-100">settlement narration</th>
+                                <th className="p-3 border-r border-slate-100">Bill by Bill-debtors</th>
+                                <th className="p-3 border-r border-slate-100 text-right">bill ref amount</th>
+                                <th className="p-3 border-r border-slate-100">bill ref due date</th>
+                                <th className="p-3 border-r border-slate-100">Bill by Bill-transport</th>
+                                <th className="p-3 border-r border-slate-100 text-right">bill ref amount-transport</th>
+                                <th className="p-3 border-r border-slate-100 font-mono">bill ref due date-transport</th>
+                                <th className="p-3 border-r border-slate-100">transporter</th>
+                                <th className="p-3 border-r border-slate-100">GR/R No.</th>
+                                <th className="p-3 border-r border-slate-100">GR Date</th>
+                                <th className="p-3 border-r border-slate-100">Vehicle No.</th>
+                                <th className="p-3 border-r border-slate-100">Station</th>
+                                <th className="p-3">pin code</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
+                              {matchedLedgerRows.length === 0 ? (
+                                <tr>
+                                  <td colSpan={37} className="p-8 text-center text-slate-400 text-[11px] font-sans">
+                                    No sales transaction records found. Upload or scan invoices in the AI sorter to record dynamically.
+                                  </td>
+                                </tr>
+                              ) : (
+                                matchedLedgerRows.map((row, idx) => (
+                                  <tr key={idx} className="hover:bg-slate-50/50">
+                                    <td className="p-3 border-r border-slate-100 text-slate-400 font-bold">A</td>
+                                    <td className="p-3 border-r border-slate-100">{row.date}</td>
+                                    <td className="p-3 border-r border-slate-100 font-bold text-slate-900">{row.invoiceNo}</td>
+                                    <td className="p-3 border-r border-slate-100 text-indigo-700 font-bold">
+                                      GST {row.gstRateSummary ? row.gstRateSummary.split(",")[0] : "18%"}
+                                    </td>
+                                    <td className="p-3 border-r border-slate-100 text-slate-600">{row.gstin || "N/A"}</td>
+                                    <td className="p-3 border-r border-slate-100 font-sans font-bold text-slate-850 truncate max-w-[150px]">{row.vendorName}</td>
+                                    <td className="p-3 border-r border-slate-100 text-slate-400">N/A</td>
+                                    <td className="p-3 border-r border-slate-100 text-right">₹0</td>
+                                    <td className="p-3 border-r border-slate-100 text-right">₹0</td>
+                                    <td className="p-3 border-r border-slate-100 text-right">₹0</td>
+                                    <td className="p-3 border-r border-slate-100 text-right">₹0</td>
+                                    <td className="p-3 border-r border-slate-100 text-right">₹0</td>
+                                    <td className="p-3 border-r border-slate-100 font-sans truncate max-w-[150px]" title={row.itemSummary}>{row.itemSummary}</td>
+                                    <td className="p-3 border-r border-slate-100 text-center font-bold">1</td>
+                                    <td className="p-3 border-r border-slate-100 text-center text-slate-500">PCS</td>
+                                    <td className="p-3 border-r border-slate-100 text-right font-bold text-slate-900">₹{row.taxableAmount.toLocaleString()}</td>
+                                    <td className="p-3 border-r border-slate-100 text-slate-500">CGST</td>
+                                    <td className="p-3 border-r border-slate-100 text-right font-semibold text-purple-700">₹{(row.gstAmount / 2).toLocaleString()}</td>
+                                    <td className="p-3 border-r border-slate-100 text-slate-500">SGST</td>
+                                    <td className="p-3 border-r border-slate-100 text-right font-semibold text-purple-700">₹{(row.gstAmount / 2).toLocaleString()}</td>
+                                    <td className="p-3 border-r border-slate-100 text-slate-400">IGST</td>
+                                    <td className="p-3 border-r border-slate-100 text-right">₹0</td>
+                                    <td className="p-3 border-r border-slate-100 font-sans font-bold">Cash</td>
+                                    <td className="p-3 border-r border-slate-100 text-right font-black text-indigo-700">₹{row.totalAmount.toLocaleString()}</td>
+                                    <td className="p-3 border-r border-slate-100 font-sans text-slate-500">Auto synced by Sakhi</td>
+                                    <td className="p-3 border-r border-slate-100 text-slate-400">N/A</td>
+                                    <td className="p-3 border-r border-slate-100 text-right">₹0</td>
+                                    <td className="p-3 border-r border-slate-100 text-slate-400">N/A</td>
+                                    <td className="p-3 border-r border-slate-100 text-slate-400">N/A</td>
+                                    <td className="p-3 border-r border-slate-100 text-right">₹0</td>
+                                    <td className="p-3 border-r border-slate-100 text-slate-400">N/A</td>
+                                    <td className="p-3 border-r border-slate-100 font-sans">Self</td>
+                                    <td className="p-3 border-r border-slate-100">N/A</td>
+                                    <td className="p-3 border-r border-slate-100">N/A</td>
+                                    <td className="p-3 border-r border-slate-100 text-slate-500">HR-55-A-1234</td>
+                                    <td className="p-3 border-r border-slate-100 font-sans">Delhi</td>
+                                    <td className="p-3">110001</td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        )}
                       </div>
 
                       {/* Summary balance sheet widget */}
@@ -1156,7 +1391,7 @@ export default function ClientDrive({
                         <div className="bg-white p-3.5 border border-slate-200 rounded-2xl grid grid-cols-2 shadow-xs text-xs">
                           <div className="space-y-0.5">
                             <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider font-mono">
-                              Total Client Volume
+                              Total Client Volume ({ledgerSubTab === "purchase" ? "Purchase" : "Sales"})
                             </span>
                             <span className="text-base font-black text-slate-900 font-mono">
                               ₹{matchedLedgerRows.reduce((a, b) => a + b.totalAmount, 0).toLocaleString()}
@@ -1164,7 +1399,7 @@ export default function ClientDrive({
                           </div>
                           <div className="text-right space-y-0.5">
                             <span className="text-[10px] text-slate-400 font-bold block uppercase tracking-wider font-mono">
-                              Input ITC Duty
+                              Input ITC / GST Duty
                             </span>
                             <span className="text-base font-black text-indigo-700 font-mono">
                               ₹{matchedLedgerRows.reduce((a, b) => a + b.gstAmount, 0).toLocaleString()}
