@@ -9,6 +9,7 @@ import {
   FileText, 
   Plus, 
   Trash2, 
+  Pencil,
   Sparkles, 
   FileCheck, 
   HelpCircle,
@@ -20,13 +21,29 @@ import {
   FolderOpen,
   FileSpreadsheet,
   MessageSquare,
-  Send
+  Send,
+  Paperclip,
+  Camera,
+  Image as ImageIcon,
+  ExternalLink,
+  Link,
+  ChevronRight,
+  Tag
 } from "lucide-react";
-import { Bill, BillItem, ClientMaster } from "../types";
+import { Bill, BillItem, ClientMaster, MasterItem, ItemMapping } from "../types";
+import PdfPreviewer from "./PdfPreviewer";
+
+interface ChatMessageAttachment {
+  name: string;
+  base64: string;
+  mimeType: string;
+  size?: number;
+}
 
 interface ChatMessage {
   role: "user" | "model";
   text: string;
+  attachment?: ChatMessageAttachment;
 }
 
 interface ColumnConfig {
@@ -69,16 +86,21 @@ function getNextAvailableLetter(cols: ColumnConfig[]): string {
   return indexToColumnLetter(maxIdx + 1);
 }
 
-function shiftColumns(existingColumns: ColumnConfig[], insertAtLetter: string): ColumnConfig[] {
-  const insertIndex = columnLetterToIndex(insertAtLetter);
-  return existingColumns.map(col => {
-    if (!col.letter) return col;
-    const colIndex = columnLetterToIndex(col.letter);
-    if (colIndex >= insertIndex) {
-      return { ...col, letter: indexToColumnLetter(colIndex + 1) };
-    }
-    return col;
+function resequenceColumns(
+  existingCols: ColumnConfig[],
+  targetCol: ColumnConfig,
+  targetLetter: string
+): ColumnConfig[] {
+  const cleanTargetCol = { ...targetCol, letter: targetLetter };
+  const filtered = existingCols.filter(col => col.key !== targetCol.key);
+  
+  const finalCols = [...filtered, cleanTargetCol].sort((a, b) => {
+    const aIdx = columnLetterToIndex(a.letter || "A");
+    const bIdx = columnLetterToIndex(b.letter || "A");
+    return aIdx - bIdx;
   });
+  
+  return finalCols;
 }
 
 const defaultColumns: ColumnConfig[] = [
@@ -123,10 +145,15 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((col, idx) => ({
+          const mapped = parsed.map((col, idx) => ({
             ...col,
             letter: col.letter || indexToColumnLetter(idx)
           }));
+          return mapped.sort((a, b) => {
+            const aIdx = columnLetterToIndex(a.letter || "A");
+            const bIdx = columnLetterToIndex(b.letter || "A");
+            return aIdx - bIdx;
+          });
         }
       } catch (e) {
         console.error("Failed to parse columns from localStorage:", e);
@@ -161,6 +188,48 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
 
   const [chatInput, setChatInput] = useState("");
   const [isSendingChat, setIsSendingChat] = useState(false);
+  const [chatAttachment, setChatAttachment] = useState<ChatMessageAttachment | null>(null);
+
+  const handleChatFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const base64Str = event.target?.result as string;
+      setChatAttachment({
+        name: file.name,
+        base64: base64Str,
+        mimeType: file.type,
+        size: file.size
+      });
+    };
+    reader.readAsDataURL(file);
+    e.target.value = "";
+  };
+
+  const handleChatInputPaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf("image") !== -1) {
+        const file = items[i].getAsFile();
+        if (file) {
+          const reader = new FileReader();
+          reader.onload = (event) => {
+            const base64Str = event.target?.result as string;
+            setChatAttachment({
+              name: `Screenshot_${new Date().toLocaleTimeString().replace(/\s/g, "")}.png`,
+              base64: base64Str,
+              mimeType: file.type,
+              size: file.size
+            });
+          };
+          reader.readAsDataURL(file);
+        }
+      }
+    }
+  };
 
   // Sync chat messages to local storage
   useEffect(() => {
@@ -169,13 +238,17 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
 
   const handleSendChatMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!chatInput.trim() || isSendingChat) return;
+    if ((!chatInput.trim() && !chatAttachment) || isSendingChat) return;
 
-    const userMsg: ChatMessage = { role: "user", text: chatInput };
+    const userMsg: ChatMessage = { 
+      role: "user", 
+      text: chatInput || (chatAttachment ? `Attached File: ${chatAttachment.name}` : ""),
+      attachment: chatAttachment || undefined
+    };
     const updatedMessages = [...chatMessages, userMsg];
     setChatMessages(updatedMessages);
-    const textToSend = chatInput;
     setChatInput("");
+    setChatAttachment(null);
     setIsSendingChat(true);
 
     try {
@@ -206,7 +279,11 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
           const synchronizedCols = data.updatedColumns.map((col: any, idx: number) => ({
             ...col,
             letter: col.letter || indexToColumnLetter(idx)
-          }));
+          })).sort((a: any, b: any) => {
+            const aIdx = columnLetterToIndex(a.letter || "A");
+            const bIdx = columnLetterToIndex(b.letter || "A");
+            return aIdx - bIdx;
+          });
           setColumns(synchronizedCols);
         }
       }
@@ -289,6 +366,14 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
   const [newColLetter, setNewColLetter] = useState("");
   const [showAddForm, setShowAddForm] = useState(false);
 
+  // Column Edit States
+  const [editingColKey, setEditingColKey] = useState<string | null>(null);
+  const [editColKeyVal, setEditColKeyVal] = useState("");
+  const [editColLabelVal, setEditColLabelVal] = useState("");
+  const [editColDescVal, setEditColDescVal] = useState("");
+  const [editColTypeVal, setEditColTypeVal] = useState<"string" | "number">("string");
+  const [editColLetterVal, setEditColLetterVal] = useState("");
+
   // Auto-fill target letter when add form is toggled
   useEffect(() => {
     if (showAddForm) {
@@ -330,6 +415,78 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
   const [documentNature, setDocumentNature] = useState<"Purchase" | "Sale">("Purchase");
   const [userOverrodeNature, setUserOverrodeNature] = useState<boolean>(false);
 
+  // Loaded master items and mappings from localStorage
+  const [masterItems, setMasterItems] = useState<MasterItem[]>(() => {
+    try {
+      const saved = localStorage.getItem("radha_master_items");
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const [itemMappings, setItemMappings] = useState<ItemMapping[]>(() => {
+    try {
+      const saved = localStorage.getItem("radha_mappings");
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  // Currently mapped master item name for the scanned item
+  const [mappedMasterItemName, setMappedMasterItemName] = useState<string>("");
+
+  // Helper to get initial mapped name for auto-selection
+  const getInitialMappedName = (scannedName: string): string => {
+    if (!scannedName) return "";
+    const match = itemMappings.find(
+      m => m.localName.toLowerCase().trim() === scannedName.toLowerCase().trim()
+    );
+    if (match) return match.masterName;
+    
+    // Fallback to substring matching in masterItems
+    const closeMatch = masterItems.find(
+      m => m.itemName.toLowerCase().includes(scannedName.toLowerCase()) || 
+           scannedName.toLowerCase().includes(m.itemName.toLowerCase())
+    );
+    return closeMatch ? closeMatch.itemName : "";
+  };
+
+  // Helper to save a mapping rule in localStorage
+  const handleCreateMappingRule = (scannedName: string, masterName: string) => {
+    if (!scannedName || !masterName) return;
+    const cleanScanned = scannedName.trim();
+    const cleanMaster = masterName.trim();
+
+    const exists = itemMappings.some(
+      m => m.localName.toLowerCase().trim() === cleanScanned.toLowerCase().trim()
+    );
+
+    let updated: ItemMapping[];
+    if (exists) {
+      updated = itemMappings.map(m => 
+        m.localName.toLowerCase().trim() === cleanScanned.toLowerCase().trim()
+          ? { ...m, masterName: cleanMaster }
+          : m
+      );
+    } else {
+      const newMap: ItemMapping = {
+        id: `map-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        localName: cleanScanned,
+        masterName: cleanMaster
+      };
+      updated = [...itemMappings, newMap];
+    }
+
+    setItemMappings(updated);
+    localStorage.setItem("radha_mappings", JSON.stringify(updated));
+    setMappedMasterItemName(cleanMaster);
+
+    // Broadcast change so App.tsx or other screens update
+    window.dispatchEvent(new Event("storage"));
+  };
+
   // Helper to dynamically rename "Vendor_Name" and "GSTIN_Supplier" labels based on Document Nature
   const getColLabel = (col: ColumnConfig) => {
     if (col.key === "Vendor_Name") {
@@ -354,6 +511,18 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
       setEditedData({});
     }
   }, [extractedResult]);
+
+  // Auto-detect and sync mapped item when extracted item changes
+  useEffect(() => {
+    const ext = Object.keys(editedData).length > 0 ? editedData : extractedResult?.extractedData;
+    if (ext && ext.Item_Name) {
+      const scannedName = String(ext.Item_Name);
+      const preMapped = getInitialMappedName(scannedName);
+      setMappedMasterItemName(preMapped);
+    } else {
+      setMappedMasterItemName("");
+    }
+  }, [editedData, extractedResult, itemMappings, masterItems]);
 
   useEffect(() => {
     if (!userOverrodeNature && selectedClientId && (editedData.GSTIN_Supplier || extractedResult?.extractedData?.GSTIN_Supplier)) {
@@ -476,9 +645,6 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
 
     const targetLetter = newColLetter.trim().toUpperCase() || getNextAvailableLetter(columns);
 
-    // Apply shifting if targetLetter is already present
-    const shiftedExisting = shiftColumns(columns, targetLetter);
-
     const newCol: ColumnConfig = {
       key: sanitizedKey,
       label: newColLabel.trim(),
@@ -487,12 +653,8 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
       letter: targetLetter
     };
 
-    // Add new column and sort all columns alphabetically by their column letter
-    const updatedColumns = [...shiftedExisting, newCol].sort((a, b) => {
-      const aLetter = a.letter || "A";
-      const bLetter = b.letter || "A";
-      return columnLetterToIndex(aLetter) - columnLetterToIndex(bLetter);
-    });
+    // Resequence all columns starting from targetLetter alphabetically with no gaps
+    const updatedColumns = resequenceColumns(columns, newCol, targetLetter);
 
     setColumns(updatedColumns);
 
@@ -510,26 +672,67 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
     const cleanLetter = newLetter.toUpperCase().replace(/[^A-Z]/g, "");
     if (!cleanLetter) return;
 
-    // 1. Filter out the column being updated so it doesn't get shifted
-    const otherCols = columns.filter(c => c.key !== colKey);
-
-    // 2. Shift the other columns to make room at the new letter
-    const shiftedOthers = shiftColumns(otherCols, cleanLetter);
-
-    // 3. Find the column being updated, assign the new letter
     const updatedCol = columns.find(c => c.key === colKey);
     if (!updatedCol) return;
 
-    const newCol = { ...updatedCol, letter: cleanLetter };
+    const finalCols = resequenceColumns(columns, updatedCol, cleanLetter);
+    setColumns(finalCols);
+  };
 
-    // 4. Combine and sort
-    const finalCols = [...shiftedOthers, newCol].sort((a, b) => {
-      const aL = a.letter || "A";
-      const bL = b.letter || "A";
-      return columnLetterToIndex(aL) - columnLetterToIndex(bL);
-    });
+  // Start editing a column and prefill form states
+  const handleStartEditColumn = (col: ColumnConfig) => {
+    setEditingColKey(col.key);
+    setEditColKeyVal(col.key);
+    setEditColLabelVal(col.label);
+    setEditColDescVal(col.description || "");
+    setEditColTypeVal(col.type);
+    setEditColLetterVal(col.letter || "A");
+  };
+
+  // Save the column edit and handle shifting / renaming
+  const handleSaveColumnEdit = (e: React.FormEvent, originalKey: string) => {
+    e.preventDefault();
+    if (!editColKeyVal.trim() || !editColLabelVal.trim()) return;
+
+    const sanitizedKey = editColKeyVal.trim().replace(/[^a-zA-Z0-9_]/g, "");
+
+    // Check if key is changed and if the new key already exists
+    if (sanitizedKey !== originalKey && columns.some(col => col.key === sanitizedKey)) {
+      alert("A column with this key already exists!");
+      return;
+    }
+
+    const targetLetter = editColLetterVal.trim().toUpperCase() || "A";
+
+    // Create a copy of columns without the original one to do shifting/resequencing
+    const remainingCols = columns.filter(col => col.key !== originalKey);
+
+    const updatedCol: ColumnConfig = {
+      key: sanitizedKey,
+      label: editColLabelVal.trim(),
+      description: editColDescVal.trim() || `Custom field: ${editColLabelVal.trim()}`,
+      type: editColTypeVal,
+      letter: targetLetter
+    };
+
+    // Auto-align and shift all subsequent columns with no gaps using our robust helper
+    const finalCols = resequenceColumns(remainingCols, updatedCol, targetLetter);
 
     setColumns(finalCols);
+
+    // If technical key was renamed, rename it inside editedData too
+    if (sanitizedKey !== originalKey) {
+      setEditedData(prev => {
+        const next = { ...prev };
+        if (originalKey in next) {
+          next[sanitizedKey] = next[originalKey];
+          delete next[originalKey];
+        }
+        return next;
+      });
+    }
+
+    setEditingColKey(null);
   };
 
   // Re-index all columns to a clean sequential A, B, C... order
@@ -741,6 +944,8 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
     if (!ext) return;
 
     const selectedClient = clientMasters.find(c => c.id === selectedClientId);
+    const scannedItemName = ext.Item_Name || "Extracted Agent Ledger Row Summary";
+    const finalMappedName = mappedMasterItemName || getInitialMappedName(scannedItemName) || "General / Standard Mapping";
 
     // Build a compliant Bill object
     const newBill: Bill = {
@@ -751,8 +956,8 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
       date: ext.Invoice_Date || new Date().toISOString().split("T")[0],
       items: [
         {
-          localName: ext.Item_Name || "Extracted Agent Ledger Row Summary",
-          mappedName: "General / Standard Mapping",
+          localName: scannedItemName,
+          mappedName: finalMappedName,
           quantity: parseFloat(ext.Item_Qty) || 1,
           rate: parseFloat(ext.Taxable_Value) || 0,
           taxableAmount: parseFloat(ext.Taxable_Value) || 0,
@@ -1019,50 +1224,143 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
                   {/* Columns Registry List */}
                   <div className="max-h-[260px] overflow-y-auto border border-slate-150 rounded-xl divide-y divide-slate-100 shadow-3xs bg-slate-50/50">
                     {columns.map((col) => (
-                      <div key={col.key} className="p-2.5 bg-white flex items-center justify-between gap-3 hover:bg-slate-50/50 transition-colors">
-                        <div className="flex items-center gap-2.5 min-w-0 flex-1">
-                          {/* Column Letter Badge */}
-                          <span className="flex-shrink-0 h-6 w-6 rounded-lg bg-amber-100 text-amber-950 font-black text-xs flex items-center justify-center border border-amber-200 shadow-3xs font-mono" title={`Column ${col.letter || "A"}`}>
-                            {col.letter || "A"}
-                          </span>
-
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="text-xs font-extrabold text-slate-800">{getColLabel(col)}</span>
-                              <span className="text-[8px] font-mono font-bold bg-slate-100 text-slate-600 px-1 py-0.5 rounded-sm uppercase">{col.type}</span>
+                      <div key={col.key} className="p-2.5 bg-white flex flex-col hover:bg-slate-50/50 transition-colors">
+                        {editingColKey === col.key ? (
+                          <form onSubmit={(e) => handleSaveColumnEdit(e, col.key)} className="space-y-3 p-3 bg-amber-50/30 rounded-xl border border-amber-200">
+                            <div className="flex items-center justify-between border-b border-amber-200/50 pb-1.5">
+                              <span className="text-[10px] font-black text-amber-900 uppercase tracking-wider flex items-center gap-1">
+                                <Pencil className="h-3 w-3" /> Edit Column Configuration
+                              </span>
+                              <button 
+                                type="button" 
+                                onClick={() => setEditingColKey(null)}
+                                className="text-[10px] text-slate-500 hover:text-slate-700 font-bold underline cursor-pointer"
+                              >
+                                Cancel
+                              </button>
                             </div>
-                            <span className="block text-[10px] font-mono text-amber-800 truncate mt-0.5">{col.key}</span>
-                            <p className="text-[10px] text-slate-400 mt-0.5 leading-tight truncate" title={col.description}>{col.description}</p>
+                            
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-700 mb-0.5">JSON Key Name</label>
+                                <input 
+                                  type="text" 
+                                  value={editColKeyVal}
+                                  onChange={e => setEditColKeyVal(e.target.value)}
+                                  required
+                                  className="w-full text-xs px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-amber-500 bg-white font-mono"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[9px] font-bold text-slate-700 mb-0.5">Human Label</label>
+                                <input 
+                                  type="text" 
+                                  value={editColLabelVal}
+                                  onChange={e => setEditColLabelVal(e.target.value)}
+                                  required
+                                  className="w-full text-xs px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-amber-500 bg-white"
+                                />
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block text-[9px] font-bold text-slate-700 mb-0.5">Instruction / Description</label>
+                              <textarea 
+                                value={editColDescVal}
+                                onChange={e => setEditColDescVal(e.target.value)}
+                                rows={2}
+                                className="w-full text-xs px-2 py-1 border border-slate-200 rounded-lg outline-none focus:border-amber-500 bg-white resize-none leading-normal"
+                              />
+                            </div>
+
+                            <div className="flex items-center justify-between gap-2 pt-0.5">
+                              <div className="flex gap-2.5">
+                                <label className="flex items-center gap-1 text-[10px] text-slate-700 font-bold cursor-pointer">
+                                  <input 
+                                    type="radio" 
+                                    name="editColType" 
+                                    checked={editColTypeVal === "string"} 
+                                    onChange={() => setEditColTypeVal("string")}
+                                    className="accent-amber-500 h-3 w-3"
+                                  /> String
+                                </label>
+                                <label className="flex items-center gap-1 text-[10px] text-slate-700 font-bold cursor-pointer">
+                                  <input 
+                                    type="radio" 
+                                    name="editColType" 
+                                    checked={editColTypeVal === "number"} 
+                                    onChange={() => setEditColTypeVal("number")}
+                                    className="accent-amber-500 h-3 w-3"
+                                  /> Number
+                                </label>
+                              </div>
+
+                              <div className="flex items-center gap-1">
+                                <span className="text-[9px] font-bold text-slate-600 font-mono">Col Letter:</span>
+                                <select
+                                  value={editColLetterVal}
+                                  onChange={(e) => setEditColLetterVal(e.target.value)}
+                                  className="text-[10px] font-extrabold font-mono px-1.5 py-0.5 bg-white border border-slate-200 rounded-lg cursor-pointer text-slate-800"
+                                >
+                                  {Array.from({ length: 52 }).map((_, i) => {
+                                    const char = indexToColumnLetter(i);
+                                    return (
+                                      <option key={char} value={char}>
+                                        Col {char}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                              </div>
+                            </div>
+
+                            <button 
+                              type="submit"
+                              className="w-full py-1.5 bg-amber-500 hover:bg-amber-650 text-slate-950 font-black text-[10px] tracking-wider uppercase rounded-lg shadow-sm transition-colors text-center cursor-pointer"
+                            >
+                              Save Changes ⚡
+                            </button>
+                          </form>
+                        ) : (
+                          <div className="flex items-center justify-between gap-3 w-full">
+                            <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                              {/* Column Letter Badge */}
+                              <span className="flex-shrink-0 h-6 w-6 rounded-lg bg-amber-100 text-amber-950 font-black text-xs flex items-center justify-center border border-amber-200 shadow-3xs font-mono" title={`Column ${col.letter || "A"}`}>
+                                {col.letter || "A"}
+                              </span>
+
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <span className="text-xs font-extrabold text-slate-800">{getColLabel(col)}</span>
+                                  <span className="text-[8px] font-mono font-bold bg-slate-100 text-slate-600 px-1 py-0.5 rounded-sm uppercase">{col.type}</span>
+                                </div>
+                                <span className="block text-[10px] font-mono text-amber-800 truncate mt-0.5">{col.key}</span>
+                                <p className="text-[10px] text-slate-400 mt-0.5 leading-tight truncate" title={col.description}>{col.description}</p>
+                              </div>
+                            </div>
+
+                            {/* Column Action buttons */}
+                            <div className="flex items-center gap-1 shrink-0">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditColumn(col)}
+                                className="text-slate-350 hover:text-amber-600 p-1.5 rounded-md hover:bg-amber-50 transition-colors shrink-0 cursor-pointer"
+                                title="Edit column details"
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </button>
+
+                              <button 
+                                type="button"
+                                onClick={() => handleDeleteColumn(col.key)}
+                                className="text-slate-300 hover:text-red-500 p-1.5 rounded-md hover:bg-red-50 transition-colors shrink-0 cursor-pointer"
+                                title="Remove column definition"
+                              >
+                                <Trash2 className="h-3.5 w-3.5" />
+                              </button>
+                            </div>
                           </div>
-                        </div>
-
-                        {/* Dropdown for Changing Column Letter and Delete Button */}
-                        <div className="flex items-center gap-2 shrink-0">
-                          <select
-                            value={col.letter || "A"}
-                            onChange={(e) => handleUpdateColumnLetter(col.key, e.target.value)}
-                            className="text-[10px] font-extrabold font-mono px-1.5 py-1 bg-slate-50 border border-slate-200 rounded-lg cursor-pointer text-slate-800 focus:border-amber-500 outline-none hover:bg-slate-100 transition-colors"
-                            title="Change column letter/position (will shift subsequent columns)"
-                          >
-                            {Array.from({ length: 52 }).map((_, i) => {
-                              const char = indexToColumnLetter(i);
-                              return (
-                                <option key={char} value={char}>
-                                  Col {char}
-                                </option>
-                              );
-                            })}
-                          </select>
-
-                          <button 
-                            type="button"
-                            onClick={() => handleDeleteColumn(col.key)}
-                            className="text-slate-300 hover:text-red-500 p-1.5 rounded-md hover:bg-red-50 transition-colors shrink-0 cursor-pointer"
-                            title="Remove column definition"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </button>
-                        </div>
+                        )}
                       </div>
                     ))}
                   </div>
@@ -1135,6 +1433,31 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
                         }`}
                       >
                         {msg.text}
+
+                        {/* Inline Attachment Rendering */}
+                        {msg.attachment && (
+                          <div className="mt-2 p-1.5 bg-slate-50/10 border border-white/10 rounded-lg max-w-full overflow-hidden">
+                            {msg.attachment.mimeType.startsWith("image/") ? (
+                              <div className="relative group">
+                                <img 
+                                  src={msg.attachment.base64} 
+                                  alt="Attached" 
+                                  className="max-h-36 max-w-full rounded border border-black/10 object-contain block bg-white"
+                                />
+                                <div className="text-[9px] mt-1 font-mono opacity-80 break-all text-slate-400">
+                                  {msg.attachment.name}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-1.5 text-slate-300">
+                                <FileText className="h-4 w-4 shrink-0 text-amber-400" />
+                                <div className="text-[10px] truncate max-w-xs font-mono font-bold text-slate-200">
+                                  {msg.attachment.name}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -1154,23 +1477,96 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
                   )}
                 </div>
 
+                {/* Chat Attachment Preview */}
+                {chatAttachment && (
+                  <div className="px-3 py-2 bg-amber-50/60 border border-amber-200/50 rounded-xl flex items-center justify-between gap-2 mt-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      {chatAttachment.mimeType.startsWith("image/") ? (
+                        <img 
+                          src={chatAttachment.base64} 
+                          alt="Attachment preview" 
+                          className="h-8 w-8 object-contain rounded border border-slate-300 bg-white"
+                        />
+                      ) : (
+                        <FileText className="h-5 w-5 text-amber-600 shrink-0" />
+                      )}
+                      <div className="text-left min-w-0">
+                        <p className="text-[10px] font-bold text-slate-800 truncate">{chatAttachment.name}</p>
+                        <p className="text-[8px] text-slate-400">{(chatAttachment.size ? chatAttachment.size / 1024 : 0).toFixed(1)} KB</p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setChatAttachment(null)}
+                      className="p-1 hover:bg-amber-100 rounded-md text-slate-500 hover:text-slate-850 cursor-pointer"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                )}
+
                 {/* Chat Input Form */}
-                <form onSubmit={handleSendChatMessage} className="mt-2 pt-2 border-t border-slate-150 flex gap-1.5">
-                  <input
-                    type="text"
-                    value={chatInput}
-                    onChange={e => setChatInput(e.target.value)}
-                    placeholder="AI ko instruct karein (e.g., set Round Off rules)..."
-                    disabled={isSendingChat}
-                    className="flex-1 text-xs px-3 py-2 border border-slate-250 rounded-xl outline-none focus:border-amber-500 bg-white placeholder-slate-400 disabled:opacity-60 text-slate-900 font-bold"
-                  />
-                  <button
-                    type="submit"
-                    disabled={!chatInput.trim() || isSendingChat}
-                    className="p-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-100 disabled:text-slate-300 text-slate-950 font-bold rounded-xl transition-all cursor-pointer shadow-3xs flex items-center justify-center shrink-0"
-                  >
-                    <Send className="h-3.5 w-3.5" />
-                  </button>
+                <form onSubmit={handleSendChatMessage} className="mt-2 pt-2 border-t border-slate-150 flex flex-col gap-1.5">
+                  <div className="flex gap-1.5 items-center">
+                    {/* Hidden Inputs */}
+                    <input 
+                      type="file" 
+                      id="chat-file-input"
+                      className="hidden"
+                      onChange={handleChatFileSelected}
+                      accept="*/*"
+                    />
+                    <input 
+                      type="file" 
+                      id="chat-image-input"
+                      className="hidden"
+                      onChange={handleChatFileSelected}
+                      accept="image/*"
+                    />
+
+                    {/* Paperclip Button */}
+                    <button
+                      type="button"
+                      title="Attach Document or PDF"
+                      onClick={() => document.getElementById("chat-file-input")?.click()}
+                      className="p-2 bg-white hover:bg-slate-100 border border-slate-250 text-slate-600 hover:text-slate-900 rounded-xl transition-all cursor-pointer shadow-3xs flex items-center justify-center shrink-0"
+                    >
+                      <Paperclip className="h-4 w-4" />
+                    </button>
+
+                    {/* Image Upload Button */}
+                    <button
+                      type="button"
+                      title="Upload Image/Screenshot"
+                      onClick={() => document.getElementById("chat-image-input")?.click()}
+                      className="p-2 bg-white hover:bg-slate-100 border border-slate-250 text-slate-600 hover:text-slate-900 rounded-xl transition-all cursor-pointer shadow-3xs flex items-center justify-center shrink-0"
+                    >
+                      <ImageIcon className="h-4 w-4" />
+                    </button>
+
+                    {/* Input Field with Paste Event */}
+                    <input
+                      type="text"
+                      value={chatInput}
+                      onChange={e => setChatInput(e.target.value)}
+                      onPaste={handleChatInputPaste}
+                      placeholder="Type message or paste screenshot directly..."
+                      disabled={isSendingChat}
+                      className="flex-1 text-xs px-3 py-2 border border-slate-250 rounded-xl outline-none focus:border-amber-500 bg-white placeholder-slate-400 disabled:opacity-60 text-slate-900 font-bold"
+                    />
+
+                    {/* Submit Button */}
+                    <button
+                      type="submit"
+                      disabled={(!chatInput.trim() && !chatAttachment) || isSendingChat}
+                      className="p-2.5 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-100 disabled:text-slate-300 text-slate-950 font-bold rounded-xl transition-all cursor-pointer shadow-3xs flex items-center justify-center shrink-0"
+                    >
+                      <Send className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <span className="text-[9px] text-slate-400 font-medium text-center block mt-1">
+                    💡 Tip: Screen screenshot paste karne ke liye input box par click karke <strong>Ctrl + V</strong> dabaayein!
+                  </span>
                 </form>
               </div>
             ) : (
@@ -1404,14 +1800,28 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
                 {/* SPLIT LEFT: ACTUAL FILE PREVIEW PANEL + WORD SNIPPETS WORKSPACE (5/12 Cols) */}
                 <div className="lg:col-span-5 space-y-4">
                   <div className="border border-slate-200 rounded-xl overflow-hidden bg-slate-50 flex flex-col h-[460px] shadow-sm">
-                    <div className="px-4 py-2 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-slate-700">
-                      <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider">
+                    <div className="px-4 py-1.5 bg-slate-100 border-b border-slate-200 flex items-center justify-between text-slate-700 gap-2">
+                      <span className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-wider">
                         <Eye className="h-3.5 w-3.5 text-amber-500" />
                         Original File Preview
                       </span>
-                      <span className="text-[10px] font-mono text-slate-500 truncate max-w-[150px]">
-                        {selectedFile.name}
-                      </span>
+                      <div className="flex items-center gap-2 min-w-0">
+                        {fileUrl && (
+                          <a
+                            href={fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 px-2 py-1 bg-amber-500 hover:bg-amber-600 text-slate-950 text-[10px] font-black uppercase rounded-lg transition-all shadow-3xs cursor-pointer shrink-0"
+                            title="Open bill in a new browser tab for full view"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            Open ↗
+                          </a>
+                        )}
+                        <span className="text-[10px] font-mono text-slate-500 truncate max-w-[110px]" title={selectedFile.name}>
+                          {selectedFile.name}
+                        </span>
+                      </div>
                     </div>
 
                     <div className="flex-1 overflow-auto p-4 flex flex-col items-center justify-center bg-slate-50">
@@ -1425,41 +1835,8 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
                           />
                         </div>
                       ) : selectedFile.type === "application/pdf" ? (
-                        <div className="w-full max-w-md p-5 border border-slate-100 rounded-2xl bg-white shadow-xs space-y-3.5 text-center my-auto">
-                          <div className="h-12 w-12 rounded-full bg-amber-50 flex items-center justify-center mx-auto text-amber-500 animate-pulse">
-                            <FileText className="h-6 w-6" />
-                          </div>
-                          
-                          <div className="space-y-1">
-                            <h4 className="text-[11px] font-black text-slate-800 uppercase tracking-widest">
-                              PDF Preview Ready!
-                            </h4>
-                            <p className="text-[10px] text-slate-500 leading-relaxed">
-                              Chrome's iframe sandbox security blocks integrated PDFs, but we have successfully prepared your document!
-                            </p>
-                            <p className="text-[10px] text-amber-850 font-semibold bg-amber-50/70 px-2 py-1.5 rounded-lg border border-amber-100 leading-normal">
-                              🛡️ क्रोम सिक्योरिटी की वजह से पीडीएफ यहाँ ब्लॉक हो जाता है। आप नीचे दिए बटन से पीडीएफ को नए टैब में खोलकर देख सकते हैं।
-                            </p>
-                          </div>
-
-                          {/* File details */}
-                          <div className="p-2 bg-slate-50 rounded-xl text-[9px] text-slate-500 font-mono text-left space-y-0.5 border border-slate-100">
-                            <p className="truncate"><span className="font-bold text-slate-700">File:</span> {selectedFile.name}</p>
-                            <p><span className="font-bold text-slate-700">Size:</span> {(selectedFile.size / 1024).toFixed(1)} KB</p>
-                          </div>
-
-                          {/* target="_blank" button */}
-                          {fileUrl && (
-                            <a 
-                              href={fileUrl} 
-                              target="_blank" 
-                              rel="noopener noreferrer" 
-                              className="inline-flex w-full py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all shadow-sm hover:shadow-md items-center justify-center gap-1.5"
-                            >
-                              <Eye className="h-3.5 w-3.5 shrink-0" />
-                              Open PDF Bill in New Tab 🌐
-                            </a>
-                          )}
+                        <div className="w-full h-full min-h-[400px]">
+                          <PdfPreviewer file={selectedFile} fileUrl={fileUrl} />
                         </div>
                       ) : (
                         <div className="p-6 text-center space-y-2">
@@ -1475,6 +1852,169 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
                           </p>
                         </div>
                       )}
+                    </div>
+                  </div>
+
+                  {/* CLIENT, ROUTING & ITEM MAPPING CONNECTOR WIDGET */}
+                  <div className="border border-slate-200 rounded-xl bg-white p-3.5 space-y-3 shadow-3xs">
+                    <div className="flex items-center gap-1.5 border-b border-slate-100 pb-2">
+                      <Workflow className="h-4 w-4 text-amber-500" />
+                      <div>
+                        <h4 className="text-xs font-black uppercase tracking-wider text-slate-800">
+                          Client, Routing & Item Mapping
+                        </h4>
+                        <p className="text-[9px] text-slate-400">
+                          Map the scanned bill properly with target clients and master inventory items
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 text-xs">
+                      {/* 1. Client selector */}
+                      <div className="space-y-1">
+                        <label className="block text-[9px] font-bold text-slate-600 uppercase tracking-wide">
+                          Active Client / क्लाइंट चुनें
+                        </label>
+                        <select
+                          value={selectedClientId}
+                          onChange={(e) => {
+                            setSelectedClientId(e.target.value);
+                            setUserOverrodeNature(false); // reset override to allow auto-detection for the new client
+                          }}
+                          className="w-full text-xs px-2.5 py-1.5 bg-slate-50 border border-slate-200 text-slate-900 rounded-lg outline-none focus:border-amber-500 font-bold cursor-pointer transition-colors"
+                        >
+                          <option value="" disabled className="text-slate-500">-- Select Client --</option>
+                          {clientMasters.map(c => (
+                            <option key={c.id} value={c.id}>
+                              {c.name} ({c.gstin || "No GST"})
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* 2. Routing Type (Nature) */}
+                      <div className="space-y-1">
+                        <label className="block text-[9px] font-bold text-slate-600 uppercase tracking-wide">
+                          Document Nature / बिल का प्रकार
+                        </label>
+                        <div className="flex bg-slate-50 p-0.5 rounded-lg border border-slate-200">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDocumentNature("Purchase");
+                              setUserOverrodeNature(true);
+                            }}
+                            className={`flex-1 py-1 px-2 text-[10px] font-bold rounded-md transition-all text-center cursor-pointer ${
+                              documentNature === "Purchase"
+                                ? "bg-amber-500 text-slate-950 shadow-3xs"
+                                : "text-slate-500 hover:text-slate-800"
+                            }`}
+                          >
+                            📥 Purchase (खरीद)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDocumentNature("Sale");
+                              setUserOverrodeNature(true);
+                            }}
+                            className={`flex-1 py-1 px-2 text-[10px] font-bold rounded-md transition-all text-center cursor-pointer ${
+                              documentNature === "Sale"
+                                ? "bg-amber-500 text-slate-950 shadow-3xs"
+                                : "text-slate-500 hover:text-slate-800"
+                            }`}
+                          >
+                            📤 Sale (बिक्री)
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* 3. Destination Routing Info */}
+                      {selectedClientId && (() => {
+                        const selectedClient = clientMasters.find(c => c.id === selectedClientId);
+                        const folderName = documentNature === "Purchase" ? "01_Purchase_Bills" : "02_Sale_Bills";
+                        const sheetName = documentNature === "Purchase" ? "Purchase Format" : "Sales Format";
+
+                        return (
+                          <div className="p-2 bg-slate-50/50 rounded-lg border border-slate-150/60 text-[9px] font-mono text-slate-600 space-y-1">
+                            <div className="flex items-center gap-1">
+                              <FolderOpen className="h-3 w-3 text-blue-500 shrink-0" />
+                              <span className="truncate">Drive Path: <strong className="text-slate-800">01_Client_Drive / {selectedClient?.name} / {folderName}</strong></span>
+                            </div>
+                            <div className="flex items-center gap-1">
+                              <FileSpreadsheet className="h-3 w-3 text-emerald-500 shrink-0" />
+                              <span>G-Sheet Target: <strong className="text-slate-800">{sheetName}</strong></span>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      {/* 4. Scanned Item Mapping Section */}
+                      {(() => {
+                        const ext = Object.keys(editedData).length > 0 ? editedData : extractedResult?.extractedData;
+                        const scannedItemName = ext?.Item_Name || "";
+
+                        if (!scannedItemName) {
+                          return (
+                            <div className="pt-2 border-t border-slate-100 text-[10px] text-slate-400 italic text-center">
+                              No scanned item name detected yet. Complete scan to map items.
+                            </div>
+                          );
+                        }
+
+                        return (
+                          <div className="pt-2 border-t border-slate-100 space-y-2">
+                            <div className="flex items-start gap-1">
+                              <Tag className="h-3.5 w-3.5 text-amber-500 mt-0.5 shrink-0" />
+                              <div className="min-w-0 flex-1">
+                                <span className="text-[9px] font-bold text-slate-400 uppercase block">Scanned Item Name / बिल का नाम</span>
+                                <span className="text-[11px] font-bold text-slate-800 break-words font-mono bg-amber-50/30 px-1 py-0.5 rounded border border-amber-100/50 block mt-0.5">
+                                  {scannedItemName}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="space-y-1">
+                              <label className="block text-[9px] font-bold text-slate-600 uppercase tracking-wide">
+                                Map to Master Inventory Item / मास्टर आइटम चुनें
+                              </label>
+                              <select
+                                value={mappedMasterItemName}
+                                onChange={(e) => setMappedMasterItemName(e.target.value)}
+                                className="w-full text-xs px-2.5 py-1.5 bg-white border border-slate-200 text-slate-900 rounded-lg outline-none focus:border-amber-500 font-bold cursor-pointer transition-colors"
+                              >
+                                <option value="">-- Choose Master Item to Map --</option>
+                                {masterItems.map(m => (
+                                  <option key={m.id} value={m.itemName}>
+                                    {m.itemName} [{m.group}]
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {mappedMasterItemName && (
+                              <button
+                                type="button"
+                                onClick={() => handleCreateMappingRule(scannedItemName, mappedMasterItemName)}
+                                className="w-full py-1 bg-slate-950 hover:bg-slate-800 text-white font-bold text-[10px] tracking-wide rounded-lg shadow-3xs transition-all flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                <Link className="h-3 w-3 text-amber-400" />
+                                Save Mapping Rule ⚡ (भविष्य के लिए याद रखें)
+                              </button>
+                            )}
+
+                            {mappedMasterItemName ? (
+                              <div className="text-[9px] text-slate-500 leading-normal bg-amber-50/40 p-2 rounded-lg border border-amber-100/50">
+                                💡 <strong>Automatic mapping active:</strong> Scans of item &ldquo;{scannedItemName}&rdquo; will now map to &ldquo;{mappedMasterItemName}&rdquo; ledger account in G-Sheet automatically.
+                              </div>
+                            ) : (
+                              <div className="text-[9px] text-amber-900 leading-normal bg-amber-50/50 p-2 rounded-lg border border-amber-200/40">
+                                ⚠️ <strong>Note:</strong> Select a Master Item from the dropdown to link/map this item correctly.
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
 

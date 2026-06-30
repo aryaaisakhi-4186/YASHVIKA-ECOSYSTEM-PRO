@@ -1211,6 +1211,16 @@ export default function App() {
           </button>
           <button
             onClick={() => {
+              setAgentModalOpen(true);
+              setMobileMenuOpen(false);
+            }}
+            className="w-full text-left py-2.5 px-3 rounded-lg text-xs transition-colors bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 font-black shadow-xs border border-amber-400 flex items-center gap-1.5 my-1"
+          >
+            <Sparkles className="h-3.5 w-3.5 animate-pulse" />
+            Agentic AI Scanner
+          </button>
+          <button
+            onClick={() => {
               setActiveTab("crawler");
               setMobileMenuOpen(false);
             }}
@@ -1242,17 +1252,6 @@ export default function App() {
           >
             Drive & Sheet Database
           </button>
-          
-          <button
-            onClick={() => {
-              setAgentModalOpen(true);
-              setMobileMenuOpen(false);
-            }}
-            className="w-full text-left py-2.5 px-3 rounded-lg text-xs transition-colors bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 font-black shadow-xs border border-amber-400 flex items-center gap-1.5 mt-2"
-          >
-            <Sparkles className="h-3.5 w-3.5" />
-            Agentic AI Scanner
-          </button>
         </div>
       )}
 
@@ -1276,6 +1275,15 @@ export default function App() {
               >
                 <LayoutDashboard className="h-3.5 w-3.5" />
                 Dashboard
+              </button>
+
+              <button
+                id="tab-btn-agentic-scan"
+                onClick={() => setAgentModalOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer text-slate-950 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 font-black shadow-xs border border-amber-400"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-slate-900 animate-pulse" />
+                Agentic AI Scanner
               </button>
 
               <button
@@ -1315,15 +1323,6 @@ export default function App() {
               >
                 <Cloud className="h-3.5 w-3.5" />
                 Drive & Sheet Database
-              </button>
-
-              <button
-                id="tab-btn-agentic-scan"
-                onClick={() => setAgentModalOpen(true)}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer text-slate-950 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 font-black shadow-xs border border-amber-400"
-              >
-                <Sparkles className="h-3.5 w-3.5 text-slate-900 animate-pulse" />
-                Agentic AI Scanner
               </button>
             </nav>
           </div>

@@ -527,9 +527,28 @@ Your tasks:
     // Map message history to Gemini contents format
     const contents: any[] = [];
     messages.forEach((msg: any) => {
+      const parts: any[] = [];
+      if (msg.text) {
+        parts.push({ text: msg.text });
+      }
+      if (msg.attachment && msg.attachment.base64 && msg.attachment.mimeType) {
+        let base64Data = msg.attachment.base64;
+        if (base64Data.includes(";base64,")) {
+          base64Data = base64Data.split(";base64,").pop() || "";
+        }
+        parts.push({
+          inlineData: {
+            data: base64Data,
+            mimeType: msg.attachment.mimeType
+          }
+        });
+      }
+      if (parts.length === 0) {
+        parts.push({ text: "" });
+      }
       contents.push({
         role: msg.role === "user" ? "user" : "model",
-        parts: [{ text: msg.text }]
+        parts
       });
     });
 
