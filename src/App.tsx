@@ -28,7 +28,6 @@ import {
 
 import { Bill, ItemMapping, SheetRow, MasterItem, UserSession, ClientMaster, TeamMaster, LedgerMaster, BankFormatMapping, SheetSchemaMapping } from "./types";
 import Dashboard from "./components/Dashboard";
-import BillScanner from "./components/BillScanner";
 import GoogleSheetSync from "./components/GoogleSheetSync";
 import SakhiChat from "./components/SakhiChat";
 import MasterItemRegistry from "./components/MasterItemRegistry";
@@ -36,6 +35,7 @@ import LoginScreen from "./components/LoginScreen";
 import ClientDrive from "./components/ClientDrive";
 import AICrawlerCockpit from "./components/AICrawlerCockpit";
 import ExcelGoogleSheetFormats from "./components/ExcelGoogleSheetFormats";
+import AgenticAIModal from "./components/AgenticAIModal";
 
 import { getAccessToken } from "./lib/firebaseAuth";
 import { 
@@ -153,6 +153,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("cockpit");
   const [showSakhi, setShowSakhi] = useState(false); // Default hide chat helper on side, can be opened via the button
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [gdriveSubTab, setGdriveSubTab] = useState<"drive" | "sheets" | "excel_formats">("drive");
   
   // DevOps / Git & Render Deploy States
@@ -864,7 +865,7 @@ export default function App() {
     }
 
     if (action.type === "change_tab") {
-      const allowed = ["cockpit", "scan", "crawler", "master", "gdrive"];
+      const allowed = ["cockpit", "crawler", "master", "gdrive"];
       if (allowed.includes(action.tab)) {
         setActiveTab(action.tab);
         return { success: true, message: `Switched screen view to "${action.tab.toUpperCase()}"` };
@@ -1210,17 +1211,6 @@ export default function App() {
           </button>
           <button
             onClick={() => {
-              setActiveTab("scan");
-              setMobileMenuOpen(false);
-            }}
-            className={`w-full text-left py-2 px-3 rounded-lg text-xs transition-colors ${
-              activeTab === "scan" ? "bg-amber-100 text-amber-800 font-bold" : "text-slate-600"
-            }`}
-          >
-            Bill Scanner (OCR & Bulk)
-          </button>
-          <button
-            onClick={() => {
               setActiveTab("crawler");
               setMobileMenuOpen(false);
             }}
@@ -1252,6 +1242,17 @@ export default function App() {
           >
             Drive & Sheet Database
           </button>
+          
+          <button
+            onClick={() => {
+              setAgentModalOpen(true);
+              setMobileMenuOpen(false);
+            }}
+            className="w-full text-left py-2.5 px-3 rounded-lg text-xs transition-colors bg-gradient-to-r from-amber-400 to-amber-500 text-slate-950 font-black shadow-xs border border-amber-400 flex items-center gap-1.5 mt-2"
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Agentic AI Scanner
+          </button>
         </div>
       )}
 
@@ -1275,19 +1276,6 @@ export default function App() {
               >
                 <LayoutDashboard className="h-3.5 w-3.5" />
                 Dashboard
-              </button>
-
-              <button
-                id="tab-btn-scan"
-                onClick={() => setActiveTab("scan")}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
-                  activeTab === "scan"
-                    ? "bg-gradient-to-r from-amber-500 to-amber-655 text-slate-950 font-black shadow-sm border border-amber-400"
-                    : "text-slate-600 hover:bg-slate-200/50 hover:text-slate-900 bg-white border border-slate-200"
-                }`}
-              >
-                <Upload className="h-3.5 w-3.5" />
-                AI Bill Scanner
               </button>
 
               <button
@@ -1328,6 +1316,15 @@ export default function App() {
                 <Cloud className="h-3.5 w-3.5" />
                 Drive & Sheet Database
               </button>
+
+              <button
+                id="tab-btn-agentic-scan"
+                onClick={() => setAgentModalOpen(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer text-slate-950 bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 font-black shadow-xs border border-amber-400"
+              >
+                <Sparkles className="h-3.5 w-3.5 text-slate-900 animate-pulse" />
+                Agentic AI Scanner
+              </button>
             </nav>
           </div>
         </div>
@@ -1345,19 +1342,6 @@ export default function App() {
               masterItems={masterItems}
               onAddMapping={handleAddMapping}
               onAddMasterItem={handleAddMasterItem}
-            />
-          )}
-
-          {activeTab === "scan" && (
-            <BillScanner
-              onBillScanned={handleAddNewBill}
-              onBulkBillsScanned={handleAddNewBillsBulk}
-              itemMappings={itemMappings}
-              onAddMapping={handleAddMapping}
-              masterItems={masterItems}
-              onTabChange={setActiveTab}
-              clientMasters={clientMasters}
-              sheetSchemaMappings={sheetSchemaMappings}
             />
           )}
 
@@ -1668,6 +1652,14 @@ export default function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {agentModalOpen && (
+        <AgenticAIModal
+          isOpen={agentModalOpen}
+          onClose={() => setAgentModalOpen(false)}
+          onBillScanned={handleAddNewBill}
+        />
       )}
     </div>
   );
