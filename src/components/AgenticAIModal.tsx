@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { 
   X, 
   Upload, 
@@ -86,21 +86,41 @@ function getNextAvailableLetter(cols: ColumnConfig[]): string {
   return indexToColumnLetter(maxIdx + 1);
 }
 
+function autoAssignLetters(cols: ColumnConfig[]): ColumnConfig[] {
+  const sorted = [...cols].sort((a, b) => {
+    const aIdx = columnLetterToIndex(a.letter || "A");
+    const bIdx = columnLetterToIndex(b.letter || "A");
+    return aIdx - bIdx;
+  });
+  return sorted.map((col, idx) => ({
+    ...col,
+    letter: indexToColumnLetter(idx)
+  }));
+}
+
 function resequenceColumns(
   existingCols: ColumnConfig[],
   targetCol: ColumnConfig,
   targetLetter: string
 ): ColumnConfig[] {
-  const cleanTargetCol = { ...targetCol, letter: targetLetter };
-  const filtered = existingCols.filter(col => col.key !== targetCol.key);
+  const targetIdx = Math.max(0, columnLetterToIndex(targetLetter));
   
-  const finalCols = [...filtered, cleanTargetCol].sort((a, b) => {
+  // Filter out the target column if it's already in the list
+  const otherCols = existingCols.filter(col => col.key !== targetCol.key);
+  
+  // Sort other columns by their current letter index to keep them in order
+  const sortedOthers = [...otherCols].sort((a, b) => {
     const aIdx = columnLetterToIndex(a.letter || "A");
     const bIdx = columnLetterToIndex(b.letter || "A");
     return aIdx - bIdx;
   });
   
-  return finalCols;
+  // Insert targetCol at targetIdx
+  const left = sortedOthers.slice(0, targetIdx);
+  const right = sortedOthers.slice(targetIdx);
+  
+  const combined = [...left, targetCol, ...right];
+  return combined;
 }
 
 const defaultColumns: ColumnConfig[] = [
@@ -149,17 +169,13 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
             ...col,
             letter: col.letter || indexToColumnLetter(idx)
           }));
-          return mapped.sort((a, b) => {
-            const aIdx = columnLetterToIndex(a.letter || "A");
-            const bIdx = columnLetterToIndex(b.letter || "A");
-            return aIdx - bIdx;
-          });
+          return autoAssignLetters(mapped);
         }
       } catch (e) {
         console.error("Failed to parse columns from localStorage:", e);
       }
     }
-    return defaultColumns;
+    return autoAssignLetters(defaultColumns);
   });
 
   // Keep columns synchronized in local storage
@@ -185,6 +201,8 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
       }
     ];
   });
+
+  const chatBottomRef = useRef<HTMLDivElement>(null);
 
   const [chatInput, setChatInput] = useState("");
   const [isSendingChat, setIsSendingChat] = useState(false);
@@ -231,10 +249,42 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
     }
   };
 
-  // Sync chat messages to local storage
+  // Sync chat messages to local storage (handling quota limitations for base64 attachments)
   useEffect(() => {
-    localStorage.setItem("agentic_chat_messages", JSON.stringify(chatMessages));
+    try {
+      localStorage.setItem("agentic_chat_messages", JSON.stringify(chatMessages));
+    } catch (e) {
+      console.warn("Storage quota exceeded, trying to save chat without heavy base64 attachments:", e);
+      // Strip heavy base64 attachments to fit in localStorage
+      const cleanMessages = chatMessages.map(msg => {
+        if (msg.attachment && msg.attachment.base64 && msg.attachment.base64.length > 50000) {
+          return {
+            ...msg,
+            attachment: {
+              ...msg.attachment,
+              base64: "" // Clear large base64 data to keep history intact
+            }
+          };
+        }
+        return msg;
+      });
+      try {
+        localStorage.setItem("agentic_chat_messages", JSON.stringify(cleanMessages));
+      } catch (err) {
+        console.error("Failed to save chat even after stripping large attachments:", err);
+      }
+    }
   }, [chatMessages]);
+
+  // Scroll to bottom of chat when messages change, when isSendingChat changes, when modal opens, or when tab switches to chat
+  useEffect(() => {
+    if (leftTab === "chat" && isOpen) {
+      const timer = setTimeout(() => {
+        chatBottomRef.current?.scrollIntoView({ behavior: "smooth" });
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [chatMessages, leftTab, isOpen, isSendingChat]);
 
   const handleSendChatMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -279,12 +329,8 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
           const synchronizedCols = data.updatedColumns.map((col: any, idx: number) => ({
             ...col,
             letter: col.letter || indexToColumnLetter(idx)
-          })).sort((a: any, b: any) => {
-            const aIdx = columnLetterToIndex(a.letter || "A");
-            const bIdx = columnLetterToIndex(b.letter || "A");
-            return aIdx - bIdx;
-          });
-          setColumns(synchronizedCols);
+          }));
+          setColumns(autoAssignLetters(synchronizedCols));
         }
       }
     } catch (err: any) {
@@ -656,7 +702,7 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
     // Resequence all columns starting from targetLetter alphabetically with no gaps
     const updatedColumns = resequenceColumns(columns, newCol, targetLetter);
 
-    setColumns(updatedColumns);
+    setColumns(autoAssignLetters(updatedColumns));
 
     // Reset form
     setNewColKey("");
@@ -676,7 +722,7 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
     if (!updatedCol) return;
 
     const finalCols = resequenceColumns(columns, updatedCol, cleanLetter);
-    setColumns(finalCols);
+    setColumns(autoAssignLetters(finalCols));
   };
 
   // Start editing a column and prefill form states
@@ -718,7 +764,7 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
     // Auto-align and shift all subsequent columns with no gaps using our robust helper
     const finalCols = resequenceColumns(remainingCols, updatedCol, targetLetter);
 
-    setColumns(finalCols);
+    setColumns(autoAssignLetters(finalCols));
 
     // If technical key was renamed, rename it inside editedData too
     if (sanitizedKey !== originalKey) {
@@ -737,16 +783,13 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
 
   // Re-index all columns to a clean sequential A, B, C... order
   const handleAutoAlignLetters = () => {
-    const updated = columns.map((col, idx) => ({
-      ...col,
-      letter: indexToColumnLetter(idx)
-    }));
-    setColumns(updated);
+    setColumns(autoAssignLetters(columns));
   };
 
   // Delete column helper
   const handleDeleteColumn = (keyToDelete: string) => {
-    setColumns(columns.filter(col => col.key !== keyToDelete));
+    const filtered = columns.filter(col => col.key !== keyToDelete);
+    setColumns(autoAssignLetters(filtered));
   };
 
   // --- VENDOR MEMORY PROFILE HELPERS ---
@@ -1475,6 +1518,7 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
                       </div>
                     </div>
                   )}
+                  <div ref={chatBottomRef} />
                 </div>
 
                 {/* Chat Attachment Preview */}
@@ -2097,120 +2141,6 @@ export default function AgenticAIModal({ isOpen, onClose, onBillScanned }: Agent
                 {/* SPLIT RIGHT: EXTRACTED RESULTS & MATH MATRIX (7/12 Cols) */}
                 <div className="lg:col-span-7 space-y-4">
                   
-                  {/* Active Client & Routing Connector */}
-                  <div className="p-4 bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-md space-y-3">
-                    <div className="flex items-center gap-2 border-b border-slate-800 pb-2">
-                      <Workflow className="h-5 w-5 text-amber-500 animate-pulse" />
-                      <div>
-                        <h3 className="text-xs font-black uppercase tracking-wider text-slate-100">
-                          Active Client & Routing Connector
-                        </h3>
-                        <p className="text-[10px] text-slate-400">
-                          AI automatically links scanned files with target folders & sheets
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 text-xs">
-                      {/* Dropdown to select client */}
-                      <div className="space-y-1.5">
-                        <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wide">
-                          Select Active Client / क्लाइंट चुनें
-                        </label>
-                        <select
-                          value={selectedClientId}
-                          onChange={(e) => {
-                            setSelectedClientId(e.target.value);
-                            setUserOverrodeNature(false); // reset override to allow auto-detection for the new client
-                          }}
-                          className="w-full text-xs px-2.5 py-2 bg-white border border-slate-300 text-slate-900 rounded-xl outline-none focus:border-amber-500 font-bold cursor-pointer"
-                        >
-                          <option value="" disabled className="text-slate-500 bg-white">-- Select Client --</option>
-                          {clientMasters.map(c => (
-                            <option key={c.id} value={c.id} className="text-slate-900 bg-white">
-                              {c.name} ({c.gstin || "No GST"})
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Nature selector */}
-                      <div className="space-y-1.5">
-                        <label className="block text-[10px] font-bold text-slate-300 uppercase tracking-wide">
-                          Document Nature / बिल का प्रकार
-                        </label>
-                        <div className="flex bg-slate-850 p-1 rounded-xl border border-slate-755">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDocumentNature("Purchase");
-                              setUserOverrodeNature(true);
-                            }}
-                            className={`flex-1 py-1 px-2 text-[10px] font-bold rounded-lg transition-all text-center cursor-pointer ${
-                              documentNature === "Purchase"
-                                ? "bg-amber-500 text-slate-950 shadow-xs"
-                                : "text-slate-400 hover:text-slate-200"
-                            }`}
-                          >
-                            📥 Purchase (खरीद)
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setDocumentNature("Sale");
-                              setUserOverrodeNature(true);
-                            }}
-                            className={`flex-1 py-1 px-2 text-[10px] font-bold rounded-lg transition-all text-center cursor-pointer ${
-                              documentNature === "Sale"
-                                ? "bg-amber-500 text-slate-950 shadow-xs"
-                                : "text-slate-400 hover:text-slate-200"
-                            }`}
-                          >
-                            📤 Sale (बिक्री)
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Connection mapping output visual helper */}
-                    {selectedClientId && (() => {
-                      const selectedClient = clientMasters.find(c => c.id === selectedClientId);
-                      const folderName = documentNature === "Purchase" ? "01_Purchase_Bills" : "02_Sale_Bills";
-                      const sheetName = documentNature === "Purchase" ? "Purchase Format" : "Sales Format";
-
-                      return (
-                        <div className="pt-2 border-t border-slate-800/80 space-y-2">
-                          <div className="flex items-center gap-1.5 text-[10px] text-amber-400 font-bold bg-amber-950/40 p-2 rounded-lg border border-amber-900/45 leading-relaxed">
-                            <span>💡</span>
-                            <span>
-                              {documentNature === "Sale" ? (
-                                <strong>Sale Bill detected</strong>
-                              ) : (
-                                <strong>Purchase Bill detected</strong>
-                              )}
-                              : {selectedClient?.name} के GSTIN ({selectedClient?.gstin || "—"}) {documentNature === "Sale" ? "वेंडर" : "खरीदार"} से मेल खाते हैं।
-                            </span>
-                          </div>
-
-                          <div className="p-2.5 bg-slate-950/80 rounded-xl text-[10px] space-y-1.5 border border-slate-800/60 font-mono text-slate-300">
-                            <div className="flex items-center gap-1.5 text-slate-400">
-                              <span className="h-1.5 w-1.5 bg-green-500 rounded-full shrink-0"></span>
-                              <span>Target Client: <strong>{selectedClient?.name}</strong></span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <FolderOpen className="h-3.5 w-3.5 text-blue-400 shrink-0" />
-                              <span className="truncate">Drive Path: <strong className="text-blue-300">01_Client_Drive / {selectedClient?.name} / {folderName}</strong></span>
-                            </div>
-                            <div className="flex items-center gap-1.5">
-                              <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
-                              <span>G-Sheet Target: <strong className="text-emerald-300">{sheetName}</strong></span>
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-
                   {/* State 1: Ready to Scan */}
                   {!extractedResult && !isScanning && (
                     <div className="p-6 border border-slate-200 bg-amber-500/5 rounded-2xl flex flex-col items-center justify-center text-center space-y-4 shadow-3xs">

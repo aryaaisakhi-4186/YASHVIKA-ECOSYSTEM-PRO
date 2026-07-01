@@ -139,16 +139,32 @@ export default function SakhiChat({
   onExecuteSakhiAction,
   onClose
 }: SakhiChatProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      sender: "sakhi",
-      text: "Radhe Radhe Ajay, aapka swagat hai! 🙏🚩",
-      timestamp: new Date(),
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    const saved = localStorage.getItem("sakhi_chat_messages");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((m: any) => ({
+            ...m,
+            timestamp: m.timestamp ? new Date(m.timestamp) : new Date()
+          }));
+        }
+      } catch (e) {
+        console.error("Failed to load sakhi chat messages:", e);
+      }
     }
-  ]);
+    return [
+      {
+        id: "welcome",
+        sender: "sakhi",
+        text: "Radhe Radhe Ajay, aapka swagat hai! 🙏🚩",
+        timestamp: new Date(),
+      }
+    ];
+  });
 
-  // Dynamically update welcome message with the logged-in user's name
+  // Dynamically update welcome message with the logged-in user's name if it's the default welcome msg
   useEffect(() => {
     const displayName = userSession?.name || "Ajay";
     setMessages(prev => prev.map(m => {
@@ -161,6 +177,15 @@ export default function SakhiChat({
       return m;
     }));
   }, [userSession]);
+
+  // Keep messages synchronized in local storage
+  useEffect(() => {
+    try {
+      localStorage.setItem("sakhi_chat_messages", JSON.stringify(messages));
+    } catch (e) {
+      console.warn("Storage quota exceeded for Sakhi chat:", e);
+    }
+  }, [messages]);
   const [inputText, setInputText] = useState("");
   const [loading, setLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
@@ -784,6 +809,25 @@ export default function SakhiChat({
           </div>
 
           <div className="flex items-center gap-1.5 shrink-0">
+            {/* Clear Chat Button */}
+            <button
+              type="button"
+              onClick={() => {
+                const displayName = userSession?.name || "Ajay";
+                const welcomeMsg = {
+                  id: "welcome",
+                  sender: "sakhi",
+                  text: `Radhe Radhe ${displayName}, aapka swagat hai! 🙏🚩`,
+                  timestamp: new Date(),
+                };
+                setMessages([welcomeMsg]);
+              }}
+              className="px-1.5 py-0.5 rounded bg-white hover:bg-slate-100 border border-slate-200 transition-all cursor-pointer text-slate-500 text-[9px] font-bold shadow-xs"
+              title="Clear Sakhi chat history"
+            >
+              Clear
+            </button>
+
             {/* Close / Hide Button */}
             {onClose && (
               <button
